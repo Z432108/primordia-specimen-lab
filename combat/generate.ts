@@ -167,8 +167,10 @@ function describe(d: Draft, ph: CombatPhenotype): string {
       return `The tentacles come down together and pin what they strike.`;
     case "tentacle_whip":
       return `A tentacle cracks outward, longer than the body is.`;
-    case "claw_arc":
-      return `The ${ph.claws?.replaceAll("_", " ") ?? "claws"} cut a ${el} arc.`;
+    case "claw_arc": {
+      const label = (ph.claws ?? "claws").replaceAll("_", " ");
+      return `A ${label} cuts a ${el} arc.`;
+    }
     case "mandible_shear":
       return `Mandibles close like shears.`;
     case "fang_bite":
