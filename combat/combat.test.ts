@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { toCombatPhenotype } from "./adapter.ts";
-import { resolveBattle, strikeDamage } from "./battle.ts";
-import { breathStyle, generateAttacks, generateDefense, kitSignature } from "./generate.ts";
-import type { Attack, CombatPhenotype, DefenseProfile } from "./types.ts";
+import { blowCap, resolveBattle, strikeDamage } from "./battle.ts";
+import { ATTACK_LEXICON, MOTIONS, WARD_LEXICON } from "./catalogue.ts";
+import { breathStyle, generateAttacks, generateDefense, kitSignature, massClassOf, massFactorOf } from "./generate.ts";
+import { chooseLine, gaitOf, hullOf, LIFE_STAGES, supportRadius, touchDistance, type Companion } from "./arena.ts";
+import { actsForAttack } from "./animate.ts";
+import type { Attack, CombatPhenotype, DefenseProfile, DefenseSpecial } from "./types.ts";
 
 function ph(partial: Partial<CombatPhenotype> & Pick<CombatPhenotype, "element" | "sizeM">): CombatPhenotype {
   return {
@@ -270,5 +273,410 @@ describe("battle", () => {
       { id: "b", name: "B", attacks: generateAttacks(plain), defense: generateDefense(plain) },
     );
     assert.deepEqual(result, again);
+  });
+
+  it("will not let one blow spend the whole fight", () => {
+    const huge: Attack = {
+      id: "huge",
+      template: "body_charge",
+      name: "Huge",
+      type: "slam",
+      element: "earth",
+      basePower: 400,
+      power: 400,
+      range: 1,
+      cooldown: 1,
+      hits: 4,
+      animationKey: "body_charge",
+      effectStyle: "charge",
+      description: "test",
+      flags: [],
+    };
+    const soft: DefenseProfile = {
+      hp: 100,
+      armor: 0,
+      knockbackResist: 0.2,
+      elementalResist: {},
+      specials: [],
+      massClass: "light",
+      notes: [],
+    };
+    const bulky: DefenseProfile = { ...soft, hp: 400, massClass: "heavy" };
+    const result = resolveBattle(
+      { id: "a", name: "A", attacks: [huge], defense: bulky },
+      { id: "b", name: "B", attacks: [huge], defense: soft },
+      2,
+    );
+    const strike = result.log.find((e) => e.actorId === "a" && e.attackId === "huge");
+    assert.ok(strike);
+    assert.ok(strike.damage <= blowCap(100));
+    assert.ok(strike.damage >= 6);
+  });
+
+  it("reads a ward, finds a seam, and lets wings and a relic answer", () => {
+    const weak: DefenseProfile = {
+      hp: 200,
+      armor: 0.45,
+      knockbackResist: 0.3,
+      elementalResist: { fire: -0.3, water: 0.4 },
+      specials: [],
+      massClass: "medium",
+      notes: [],
+    };
+    const bite: Attack = {
+      id: "bite", template: "fang_bite", name: "Bite", type: "melee", element: "water",
+      basePower: 30, power: 30, range: 1.2, cooldown: 2, animationKey: "jaw_snap", effectStyle: "bite", description: "", flags: [],
+    };
+    const breath: Attack = {
+      id: "breath", template: "breath_stream", name: "Stream", type: "breath", element: "fire",
+      basePower: 22, power: 22, range: 7, cooldown: 4, animationKey: "breath_stream", effectStyle: "stream", description: "", flags: [],
+    };
+    const dull = resolveBattle(
+      { id: "a", name: "A", attacks: [bite, breath], defense: { ...weak, hp: 80, focus: 1 } },
+      { id: "b", name: "B", attacks: [bite], defense: weak },
+      1,
+    );
+    const keen = resolveBattle(
+      { id: "a", name: "A", attacks: [bite, breath], defense: { ...weak, hp: 80, focus: 1.2 } },
+      { id: "b", name: "B", attacks: [bite], defense: weak },
+      1,
+    );
+    assert.equal(dull.log.find((e) => e.actorId === "a")?.attackId, "bite");
+    assert.equal(keen.log.find((e) => e.actorId === "a")?.attackId, "breath");
+    const plate: DefenseProfile = { ...weak, elementalResist: {}, armor: 0.5 };
+    const melee: Attack = { ...breath, id: "ram", type: "melee", template: "body_charge", power: 22, basePower: 22 };
+    assert.ok(strikeDamage(breath, plate) > strikeDamage(melee, plate));
+    const ground: DefenseProfile = { ...plate, armor: 0, airborne: false };
+    const aloft: DefenseProfile = { ...ground, airborne: true };
+    const slam: Attack = { ...melee, type: "slam", flags: [] };
+    assert.ok(strikeDamage(slam, aloft) < strikeDamage(slam, ground));
+    const winged: Attack = { ...slam, flags: ["aerial"] };
+    assert.ok(strikeDamage(winged, ground) > strikeDamage(slam, ground));
+    const guarded = resolveBattle(
+      { id: "a", name: "A", attacks: [bite], defense: { ...weak, hp: 40 } },
+      {
+        id: "b",
+        name: "B",
+        attacks: [bite],
+        defense: { ...weak, specials: [{ id: "relic-aegis", name: "Relic", description: "", value: 0.12 }] },
+      },
+      1,
+    );
+    const answered = guarded.log.find((e) => e.actorId === "a");
+    assert.equal(answered?.aside, "The relic answers.");
+    const again = guarded.log.filter((e) => e.aside === "The relic answers.");
+    assert.equal(again.length, 1);
+  });
+
+  it("keeps a twin, a coat, a planted body, and a reaching relic distinct", () => {
+    const hide: DefenseProfile = {
+      hp: 180,
+      armor: 0.2,
+      knockbackResist: 0.4,
+      elementalResist: { fire: -0.3, water: 0.35 },
+      specials: [],
+      massClass: "medium",
+      notes: [],
+    };
+    const fire: Attack = {
+      id: "fire", template: "breath_stream", name: "Fire", type: "breath", element: "fire",
+      basePower: 20, power: 20, range: 6, cooldown: 3, animationKey: "breath_stream", effectStyle: "s", description: "", flags: [],
+    };
+    const twin: Attack = { ...fire, id: "twin", flags: ["dual"], element2: "water", type: "special" };
+    const pure = strikeDamage(fire, hide);
+    const mixed = strikeDamage(twin, hide);
+    assert.notEqual(pure, mixed);
+    const water: Attack = { ...fire, id: "water", element: "water", type: "projectile" };
+    const bare = resolveBattle(
+      { id: "a", name: "A", attacks: [water], defense: { ...hide, hp: 60 } },
+      { id: "b", name: "B", attacks: [water], defense: hide },
+      1,
+    );
+    const coated = resolveBattle(
+      { id: "a", name: "A", attacks: [water], defense: { ...hide, hp: 60 } },
+      { id: "b", name: "B", attacks: [water], defense: { ...hide, specials: [{ id: "mucus", name: "Mucus", description: "", value: 0.12 }] } },
+      1,
+    );
+    const open = bare.log.find((e) => e.actorId === "a")!;
+    const shut = coated.log.find((e) => e.actorId === "a")!;
+    assert.ok(shut.damage < open.damage);
+    assert.equal(shut.aside, "The coat shrugs it.");
+    const slam: Attack = { ...fire, id: "slam", type: "slam", element: "earth", fxMotion: "slam", animationKey: "body_charge" };
+    const shoved = resolveBattle(
+      { id: "a", name: "A", attacks: [slam], defense: { ...hide, hp: 50 } },
+      { id: "b", name: "B", attacks: [slam], defense: hide },
+      1,
+    );
+    const planted = resolveBattle(
+      { id: "a", name: "A", attacks: [slam], defense: { ...hide, hp: 50 } },
+      { id: "b", name: "B", attacks: [slam], defense: { ...hide, specials: [{ id: "immovable", name: "Mass", description: "", value: 0.7 }] } },
+      1,
+    );
+    assert.ok(planted.log.find((e) => e.actorId === "a")!.damage < shoved.log.find((e) => e.actorId === "a")!.damage);
+    const bite: Attack = { ...fire, id: "bite", type: "melee", range: 1.2, element: "beast", fxMotion: "bite" };
+    const reach: DefenseSpecial = { id: "relic-aegis", name: "Reach", description: "", value: 0.12, aspect: "reach" };
+    const missed = resolveBattle(
+      { id: "a", name: "A", attacks: [fire], defense: { ...hide, hp: 40 } },
+      { id: "b", name: "B", attacks: [fire], defense: { ...hide, specials: [reach] } },
+      1,
+    );
+    const caught = resolveBattle(
+      { id: "a", name: "A", attacks: [bite], defense: { ...hide, hp: 40 } },
+      { id: "b", name: "B", attacks: [bite], defense: { ...hide, specials: [reach] } },
+      1,
+    );
+    assert.notEqual(missed.log.find((e) => e.actorId === "a")?.aside, "The relic meets that blow.");
+    assert.equal(caught.log.find((e) => e.actorId === "a")?.aside, "The relic meets that blow.");
+  });
+});
+
+describe("the field", () => {
+  it("holds hundreds of distinct attacks, wards, and motions", () => {
+    assert.ok(ATTACK_LEXICON.length >= 2000);
+    assert.ok(WARD_LEXICON.length >= 500);
+    assert.equal(new Set(ATTACK_LEXICON.map((t) => t.id)).size, ATTACK_LEXICON.length);
+    assert.equal(new Set(ATTACK_LEXICON.map((t) => t.name)).size, ATTACK_LEXICON.length);
+    assert.equal(new Set(WARD_LEXICON.map((w) => w.id)).size, WARD_LEXICON.length);
+    assert.equal(new Set(WARD_LEXICON.map((w) => w.name)).size, WARD_LEXICON.length);
+    assert.ok(new Set(ATTACK_LEXICON.map((t) => t.motion)).size >= 18);
+    for (const tech of ATTACK_LEXICON) {
+      const hits = tech.hits ?? 1;
+      const aoe = tech.aoeRadius ? 1 + Math.min(0.25, tech.aoeRadius * 0.05) : 1;
+      const dot = tech.type === "dot" ? tech.basePower * 0.28 * 2 : 0;
+      const threat = (tech.basePower * hits * aoe + dot) / tech.cooldown;
+      assert.ok(threat >= 5 && threat <= 16, `${tech.id} threat ${threat}`);
+    }
+  });
+
+  it("keeps same-sized bouts contestable and gives size an edge that is not a lock", () => {
+    const elements = ["plant", "fire", "water", "earth", "ice", "electric", "plasma", "air", "metal", "light", "void", "beast"];
+    const coverings = ["skin", "fur", "scale", "chitin", "plate", "shell", "bark", "slime"];
+    let seed = 20261025;
+    const rnd = () => {
+      seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const roll = (band: "light" | "heavy") => {
+      for (let n = 0; n < 12; n++) {
+        const element = elements[Math.floor(rnd() * elements.length)]!;
+        const second = rnd() < 0.25 ? elements[Math.floor(rnd() * elements.length)] : undefined;
+        const sizeM = band === "light" ? 0.45 + rnd() * 0.4 : 2.55 + rnd() * 1.1;
+        const build = band === "light" ? (["lithe", "wraith", "dancer"] as const)[Math.floor(rnd() * 3)]! : (["titan", "colossus", "guardian"] as const)[Math.floor(rnd() * 3)]!;
+        const units = [];
+        if (rnd() < 0.55) units.push({ unit: "horn", count: 1 + Math.floor(rnd() * 3) });
+        if (rnd() < 0.4) units.push({ unit: "wing", count: 2 });
+        if (rnd() < 0.35) units.push({ unit: "tentacle", count: 2 + Math.floor(rnd() * 4) });
+        if (rnd() < 0.45) units.push({ unit: "tail", count: 1 });
+        if (rnd() < 0.3) units.push({ unit: "spine", count: 2 });
+        const body = ph({
+          element,
+          element2: second && second !== element ? second : undefined,
+          sizeM,
+          build,
+          covering: { type: coverings[Math.floor(rnd() * coverings.length)]! },
+          units,
+          claws: rnd() < 0.35 ? "talon" : undefined,
+          loco: rnd() < 0.3 ? "Swim" : undefined,
+        });
+        const cls = massClassOf(massFactorOf(body.sizeM, body.build));
+        if (cls === band) return body;
+      }
+      return ph({
+        element: "beast",
+        sizeM: band === "light" ? 0.6 : 3,
+        build: band === "light" ? "lithe" : "colossus",
+        covering: { type: "skin" },
+      });
+    };
+    const fight = (aPh: ReturnType<typeof ph>, bPh: ReturnType<typeof ph>) =>
+      resolveBattle(
+        { id: "a", name: "A", attacks: generateAttacks(aPh), defense: generateDefense(aPh) },
+        { id: "b", name: "B", attacks: generateAttacks(bPh), defense: generateDefense(bPh) },
+      );
+    let peerWins = 0;
+    const peers = 24;
+    for (let i = 0; i < peers; i++) {
+      const left = roll("light");
+      const right = roll("light");
+      const result = fight(left, right);
+      if (result.winnerId === "a" || result.winnerId === "b") peerWins += 1;
+      else peerWins += 0.5;
+    }
+    assert.ok(peerWins >= 8, `peer fights resolved ${peerWins}`);
+    let heavyWins = 0;
+    let lightShare = 0;
+    const crosses = 24;
+    for (let i = 0; i < crosses; i++) {
+      const heavy = roll("heavy");
+      const light = roll("light");
+      const heavyHp = generateDefense(heavy).hp;
+      const result = fight(heavy, light);
+      if (result.winnerId === "a") heavyWins += 1;
+      lightShare += 1 - result.leftHp / heavyHp;
+    }
+    assert.ok(heavyWins >= 16 && heavyWins <= 23, `heavy won ${heavyWins} of ${crosses}`);
+    assert.ok(lightShare / crosses >= 0.5, `lighter bodies dealt ${lightShare / crosses}`);
+  });
+});
+
+describe("every body", () => {
+  it("uses the lab ages, not invented ones", () => {
+    assert.deepEqual(
+      [...LIFE_STAGES],
+      ["Sprout", "Keen", "Adept", "Apex", "Steward", "Artisan", "Exemplar", "Sovereign"],
+    );
+  });
+  const blank = (): Companion => ({
+    id: "a",
+    name: "A",
+    stage: "Apex",
+    element: "beast",
+    sizeM: 1.4,
+    maxHp: 80,
+    hp: 80,
+    horns: false,
+    wings: false,
+    tail: false,
+    legs: 0,
+    claws: false,
+    fins: false,
+    tentacles: false,
+    shell: false,
+    covering: "skin",
+    loco: "",
+    ecology: "",
+    armor: 0.1,
+    plan: "",
+    organ: "",
+    volant: false,
+    spines: false,
+    mandibles: false,
+    gait: "crawl",
+  });
+
+  function grown(over: Partial<Companion>): Companion {
+    const c = { ...blank(), ...over };
+    c.gait = gaitOf(c);
+    return c;
+  }
+
+  const plans: Array<[string, Partial<Companion>, Companion["gait"]]> = [
+    ["biped", { plan: "biped" }, "stride"],
+    ["quadruped", { plan: "quadruped" }, "gallop"],
+    ["centauroid", { plan: "centauroid" }, "gallop"],
+    ["hexapod", { plan: "hexapod" }, "scuttle"],
+    ["octopod", { plan: "octopod" }, "scuttle"],
+    ["aquatic stand", { plan: "aquatic_stand" }, "stride"],
+    ["serpent", { plan: "serpentine" }, "slither"],
+    ["worm", { plan: "worm" }, "crawl"],
+    ["segmented serpent", { plan: "segmented_serpent" }, "slither"],
+    ["radial", { plan: "radial" }, "radial"],
+    ["sessile radial", { plan: "sessile_radial" }, "rooted"],
+    ["blob", { plan: "blob" }, "ooze"],
+    ["amorphous", { plan: "amorphous" }, "ooze"],
+    ["sessile mass", { plan: "sessile_mass" }, "rooted"],
+    ["floater", { plan: "floater" }, "hover"],
+    ["swimmer", { plan: "swimmer", fins: true }, "swim"],
+  ];
+
+  const locos: Array<[string, Partial<Companion>, Companion["gait"]]> = [
+    ["BipedWalk", { loco: "BipedWalk" }, "stride"],
+    ["Crawl", { loco: "Crawl" }, "crawl"],
+    ["Hover", { loco: "Hover" }, "hover"],
+    ["Hover with wings", { loco: "Hover", wings: true }, "fly"],
+    ["MultiLegRipple", { loco: "MultiLegRipple" }, "scuttle"],
+    ["QuadGait", { loco: "QuadGait" }, "gallop"],
+    ["Sessile", { loco: "Sessile" }, "rooted"],
+    ["Slither", { loco: "Slither" }, "slither"],
+    ["Swim", { loco: "Swim" }, "swim"],
+  ];
+
+  it("gives every plan and every gait its own way of moving", () => {
+    const seen = new Set<string>();
+    for (const [label, over, gait] of [...plans, ...locos]) {
+      const c = grown(over);
+      assert.equal(c.gait, gait, label);
+      seen.add(c.gait);
+    }
+    assert.equal(seen.size, 11);
+  });
+
+  it("keeps a rooted body on its ground and still lets every other body commit", () => {
+    const covers = [
+      { x: 0.36, y: 0.46, r: 0.06, kind: "stone" as const },
+      { x: 0.64, y: 0.56, r: 0.07, kind: "tree" as const },
+      { x: 0.5, y: 0.62, r: 0.12, kind: "pool" as const },
+    ];
+    for (const [, over] of plans) {
+      const a = grown({ ...over, name: "Left", id: "a" });
+      const d = grown({ plan: "biped", name: "Right", id: "b" });
+      const line = chooseLine(a, d, "bite", "jaw_snap", covers, 0.2, 0.6, 0.8, 0.6);
+      assert.ok(line.note.includes("Left"), a.plan || a.loco);
+      assert.ok(line.ax >= 0 && line.ax <= 1 && line.dx >= 0 && line.dx <= 1);
+      if (a.gait === "rooted") assert.equal(line.ax, 0.2);
+      if (a.gait === "swim") assert.ok(Math.abs(line.ay - 0.62) < 0.02, "a swimmer uses the water");
+    }
+  });
+});
+
+describe("hit and act", () => {
+  it("meets on the facing axis and stays thin from the side", () => {
+    const long = hullOf([-0.2, 0, -1], [0.2, 0.6, 1]);
+    assert.ok(Math.abs(long.along - 1) < 1e-6);
+    assert.ok(Math.abs(long.across - 0.2) < 1e-6);
+    const nose = supportRadius(long, Math.PI / 2, 1, 0);
+    const shoulder = supportRadius(long, Math.PI / 2, 0, 1);
+    assert.ok(nose > shoulder * 2);
+    const headOn = touchDistance(long, Math.PI / 2, 0, 0, long, -Math.PI / 2, 5, 0, 0);
+    const beside = touchDistance(long, 0, 0, 0, long, 0, 2, 0, 0);
+    assert.ok(Math.abs(headOn - 2) < 0.05);
+    assert.ok(beside < 0.5);
+    assert.ok(headOn > beside * 3);
+  });
+
+  it("gives every motion a pose of its own", () => {
+    const owned = ["yawn", "wing_stretch", "display", "sway", "pounce", "glow_pulse", "tentacle_explore", "shake_off", "rear"];
+    const first = new Map<string, string>();
+    for (const motion of MOTIONS) {
+      const acts = actsForAttack("act", motion, owned);
+      const playable = acts.filter((id) => owned.includes(id));
+      assert.ok(playable.length > 2, motion);
+      first.set(motion, playable[0]!);
+    }
+    assert.notEqual(first.get("bite"), first.get("wing"));
+    assert.notEqual(first.get("stream"), first.get("slam"));
+    assert.notEqual(first.get("charge"), first.get("rain"));
+    assert.notEqual(first.get("lash"), first.get("bite"));
+  });
+
+  it("lets lab stats edge a body without changing an unmeasured one", () => {
+    const plain = ph({ element: "beast", sizeM: 1.4, units: [{ unit: "horn", count: 2 }] });
+    const measured = ph({ element: "beast", sizeM: 1.4, units: [{ unit: "horn", count: 2 }], stats: { power: 1.24, guard: 1.2, vigor: 1.18, swift: 1.22, focus: 1.16, spirit: 1.1 } });
+    const a = generateAttacks(plain);
+    const da = generateDefense(plain);
+    const db = generateDefense(measured);
+    assert.ok(db.hp >= da.hp);
+    assert.ok(db.armor >= da.armor);
+    assert.equal(da.edge, undefined);
+    assert.ok((db.edge ?? 1) > 1);
+    assert.equal(da.initiative, undefined);
+    assert.ok((db.initiative ?? 0) > 1);
+    const kit = { id: "a", name: "A", attacks: a, defense: { ...da, hp: 80 } };
+    const keen = { id: "b", name: "B", attacks: a, defense: { ...da, hp: 80, initiative: 1.2 } };
+    const result = resolveBattle(kit, { ...keen, defense: { ...keen.defense, initiative: 1.2 } }, 1);
+    assert.equal(result.log.find((e) => e.attackId !== "dot" && e.attackId !== "knit")?.actorId, "b");
+    const blunt = resolveBattle(
+      { id: "a", name: "A", attacks: a, defense: { ...da, hp: 400 } },
+      { id: "b", name: "B", attacks: a, defense: { ...da, hp: 400 } },
+      1,
+    );
+    const sharp = resolveBattle(
+      { id: "a", name: "A", attacks: a, defense: { ...da, hp: 400, edge: db.edge } },
+      { id: "b", name: "B", attacks: a, defense: { ...da, hp: 400 } },
+      1,
+    );
+    const bluntHit = blunt.log.find((e) => e.actorId === "a" && e.attackId !== "knit");
+    const sharpHit = sharp.log.find((e) => e.actorId === "a" && e.attackId !== "knit");
+    assert.ok(bluntHit && sharpHit && sharpHit.damage > bluntHit.damage);
   });
 });

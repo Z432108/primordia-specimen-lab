@@ -123,6 +123,9 @@ function normalizeCombat(input: Record<string, unknown>): CombatPhenotype {
     shell,
     ascent,
     loco: str(input.loco),
+    ecology: str(input.ecology),
+    plan: str(input.plan),
+    volant: input.volant === true || input.volant === 1,
     stats: isRecord(input.stats) ? (input.stats as Record<string, number>) : undefined,
   };
 }
@@ -209,6 +212,9 @@ export function toCombatPhenotype(input: unknown, hints?: AdapterHints): CombatP
     shell,
     ascent,
     loco: str(input.loco),
+    ecology: str(input.ecology),
+    plan: str(input.plan),
+    volant: input.volant === true || input.volant === 1,
     stats,
   };
 }

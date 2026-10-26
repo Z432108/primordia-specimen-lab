@@ -20,6 +20,13 @@ export interface Attack {
   effectStyle: string;
   description: string;
   flags: string[];
+  /** Which performance from the field this blow is wearing. */
+  variantId?: string;
+  manner?: string;
+  fxMotion?: string;
+  fxSeed?: number;
+  /** The other element, when a twin cast carries both. */
+  element2?: string;
 }
 
 export interface DefenseSpecial {
@@ -27,6 +34,8 @@ export interface DefenseSpecial {
   name: string;
   description: string;
   value: number;
+  /** Relic use, when this ward is a relic. Decides which blows it answers. */
+  aspect?: string;
 }
 
 export interface DefenseProfile {
@@ -37,6 +46,14 @@ export interface DefenseProfile {
   specials: DefenseSpecial[];
   massClass: MassClass;
   notes: string[];
+  /** From the lab's power. Applied when the blow lands, so the kit ceiling cannot erase it. */
+  edge?: number;
+  /** From the lab's swift, when the body has one. Breaks a tie for the first blow. */
+  initiative?: number;
+  /** From the lab's focus. Shortens a long recovery by one beat, never below one. A keen focus also reads the foe's ward. */
+  focus?: number;
+  /** Light wings, or a body that is already aloft. Ground slams meet less of it. */
+  airborne?: boolean;
 }
 
 export interface CombatUnit {
@@ -68,6 +85,9 @@ export interface CombatPhenotype {
     relic?: CombatRelic;
   };
   loco?: string;
+  ecology?: string;
+  plan?: string;
+  volant?: boolean;
   stats?: Record<string, number>;
 }
 

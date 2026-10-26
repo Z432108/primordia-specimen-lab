@@ -1,20 +1,7 @@
 import type { Attack, CombatPhenotype, DefenseProfile, DefenseSpecial, MassClass } from "./types.ts";
 import { BUILD_MASS, COVERING_ARMOR, ELEMENT_RESIST, isLargeBuild } from "./tables.ts";
-
-const ADJ: Record<string, string> = {
-  plant: "Sap",
-  fire: "Cinder",
-  water: "Brine",
-  earth: "Loam",
-  ice: "Rime",
-  electric: "Storm",
-  plasma: "Solar",
-  air: "Gale",
-  metal: "Iron",
-  light: "Gilt",
-  void: "Null",
-  beast: "Feral",
-};
+import { ADJ, fieldHash, matchVariant, motionForAnimation, wardPresentation, type MannerId } from "./catalogue.ts";
+import { armorCut, expectedThreat } from "./battle.ts";
 
 const NOUN: Record<string, string> = {
   spike_volley: "Volley",
@@ -84,6 +71,7 @@ interface Draft {
   priority: number;
   name?: string;
   description?: string;
+  element2?: string;
 }
 
 export function statMul(value: number | undefined): number {
@@ -102,6 +90,130 @@ export function massClassOf(factor: number): MassClass {
   if (factor < 1.05) return "light";
   if (factor < 1.85) return "medium";
   return "heavy";
+}
+
+/** Mass still tells. It no longer decides the fight by itself. */
+export function combatScale(factor: number): number {
+  return Math.pow(Math.max(0.35, factor), 0.26);
+}
+
+export function techniqueBorne(
+  ph: CombatPhenotype,
+  tech: { gate: string; element: string; organ?: string; relicUse?: string },
+): boolean {
+  const element = ph.element || "beast";
+  if (tech.element !== element && tech.element !== ph.element2) return false;
+  const horns = countUnits(ph, "horn", "horns");
+  const tentacles = countUnits(ph, "tentacle", "tentacles");
+  const wings = countUnits(ph, "wing", "wings");
+  const tails = countUnits(ph, "tail", "tails");
+  const fins = countUnits(ph, "fin", "fins");
+  const spines = countUnits(ph, "spine", "quill") + (hasFeature(ph, /quill|spine|spike/) ? 1 : 0);
+  const sculpture = ph.shell?.sculpture ?? [];
+  const spiny = sculpture.some((s) => s === "spines" || s === "knobs");
+  const covering = ph.covering?.type ?? "skin";
+  const sting = hasFeature(ph, /sting|manticore/) || ph.units.some((u) => /sting/.test(u.role ?? ""));
+  switch (tech.gate) {
+    case "any":
+    case "breath":
+    case "bite":
+      return true;
+    case "horn1":
+      return horns >= 1;
+    case "horn2":
+      return horns >= 2;
+    case "spine":
+      return spines > 0;
+    case "tentacle1":
+      return tentacles >= 1;
+    case "tentacle3":
+      return tentacles >= 3;
+    case "claw":
+      return clawish(ph.claws);
+    case "heavyClaw":
+      return /pincer|scythe/.test(ph.claws ?? "");
+    case "mandible":
+      return countUnits(ph, "mandible") > 0 || hasFeature(ph, /mandible/);
+    case "fang":
+      return hasFeature(ph, /fang|carnass|serrat|needle/);
+    case "tail":
+      return tails > 0;
+    case "sting":
+      return sting && tails > 0;
+    case "wing":
+      return wings > 0;
+    case "fin":
+      return fins >= 2 && (ph.loco === "Swim" || ph.loco === "Hover");
+    case "armorhide":
+      return ["shell", "plate", "chitin", "scale"].includes(covering) || spiny;
+    case "dual":
+      return !!ph.element2 && ph.element2 !== element;
+    case "organ":
+      return ph.ascent?.organ === tech.organ;
+    case "relic":
+      return ph.ascent?.relic?.use === tech.relicUse;
+    default:
+      return false;
+  }
+}
+
+function mannerFor(ph: CombatPhenotype): MannerId {
+  const mass = massClassOf(massFactorOf(ph.sizeM, ph.build));
+  if (mass === "heavy") return "charged";
+  if (mass === "light") return "quick";
+  if (hasFeature(ph, /sting|manticore|venom/) || ph.element === "plant") return "echoing";
+  return "measured";
+}
+
+function wear(ph: CombatPhenotype, attack: Attack, manner: MannerId): Attack {
+  const tech = matchVariant({
+    template: attack.template,
+    element: attack.element,
+    manner,
+    organ: attack.template === "organ_pulse" ? ph.ascent?.organ : undefined,
+    relicUse: attack.template === "relic_invoke" ? ph.ascent?.relic?.use : undefined,
+  });
+  const flags = [...attack.flags];
+  let cooldown = attack.cooldown;
+  let mul = 1;
+  if (manner === "quick" && cooldown >= 3) {
+    const next = cooldown - 1;
+    mul = next / cooldown;
+    cooldown = next;
+  } else if (manner === "charged") {
+    const next = cooldown + 1;
+    mul = next / cooldown;
+    cooldown = next;
+  } else if (manner === "echoing" && attack.type !== "dot" && !flags.includes("echo")) {
+    mul = 0.88;
+    flags.push("echo");
+  }
+  return {
+    ...attack,
+    name: tech?.name ?? attack.name,
+    description: tech?.description ?? attack.description,
+    effectStyle: tech?.effectStyle ?? attack.effectStyle,
+    power: Math.max(1, Math.round(attack.power * mul)),
+    cooldown,
+    flags,
+    manner,
+    variantId: tech?.id ?? `${attack.template}:${attack.element}:${manner}`,
+    fxMotion: tech?.motion ?? motionForAnimation(attack.animationKey),
+    fxSeed: tech?.fxSeed ?? fieldHash(`${attack.template}:${attack.element}:${manner}`),
+  };
+}
+
+function compressKit(attacks: Attack[], mass: MassClass): void {
+  if (!attacks.length) return;
+  const avg = attacks.reduce((sum, a) => sum + expectedThreat(a), 0) / attacks.length;
+  const ceiling = mass === "light" ? 16 : mass === "heavy" ? 26 : 20;
+  const floor = mass === "light" ? 8 : mass === "heavy" ? 12 : 10;
+  if (avg <= ceiling && avg >= floor) return;
+  const scale = (avg > ceiling ? ceiling : floor) / avg;
+  for (const attack of attacks) {
+    attack.power = Math.max(1, Math.round(attack.power * scale));
+    attack.basePower = Math.max(1, Math.round(attack.basePower * scale));
+  }
 }
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -449,6 +561,7 @@ export function generateAttacks(ph: CombatPhenotype): Attack[] {
       effectStyle: "twin",
       flags: ["dual", "priority", "elemental"],
       priority: 2,
+      element2: element,
       name: `${ADJ[element] ?? title(element)}–${ADJ[ph.element2] ?? title(ph.element2)} Twin`,
     });
   }
@@ -560,27 +673,35 @@ export function generateAttacks(ph: CombatPhenotype): Attack[] {
   const kept = drafts.slice(0, 6);
 
   const factor = massFactorOf(ph.sizeM, ph.build);
+  const scale = combatScale(factor);
   const powerMul = statMul(ph.stats?.power);
-  const attacks: Attack[] = kept.map((d, i) => {
-    const power = Math.max(1, Math.round(d.basePower * factor * powerMul));
-    return {
-      id: `${d.template}:${d.element}:${i}`,
-      template: d.template,
-      name: named(d.template, d.element, d.name),
-      type: d.type,
-      element: d.element,
-      basePower: d.basePower,
-      power,
-      range: d.range,
-      cooldown: d.cooldown,
-      aoeRadius: d.aoeRadius,
-      hits: d.hits,
-      animationKey: d.animationKey,
-      effectStyle: d.effectStyle,
-      description: describe(d, ph),
-      flags: d.flags,
-    };
+  const manner = mannerFor(ph);
+  const attacks = kept.map((d, i) => {
+    const power = Math.max(1, Math.round(d.basePower * scale * powerMul));
+    return wear(
+      ph,
+      {
+        id: `${d.template}:${d.element}:${i}`,
+        template: d.template,
+        name: named(d.template, d.element, d.name),
+        type: d.type,
+        element: d.element,
+        basePower: d.basePower,
+        power,
+        range: d.range,
+        cooldown: d.cooldown,
+        aoeRadius: d.aoeRadius,
+        hits: d.hits,
+        animationKey: d.animationKey,
+        effectStyle: d.effectStyle,
+        description: describe(d, ph),
+        flags: d.flags,
+        element2: d.element2,
+      },
+      manner,
+    );
   });
+  compressKit(attacks, massClassOf(factor));
 
   attacks.sort((a, b) => {
     const ap = a.power + (a.flags.includes("priority") ? 6 : 0);
@@ -598,14 +719,16 @@ export function generateDefense(ph: CombatPhenotype): DefenseProfile {
   const covering = ph.covering?.type ?? "skin";
   const factor = massFactorOf(ph.sizeM, ph.build);
   const massClass = massClassOf(factor);
-  let armor = COVERING_ARMOR[covering] ?? 0.04;
+  let material = COVERING_ARMOR[covering] ?? 0.04;
   const sculpture = ph.shell?.sculpture ?? [];
-  if (sculpture.includes("spines") || sculpture.includes("knobs")) armor += 0.04;
-  if (ph.shell && covering !== "shell" && covering !== "plate") armor += 0.06;
-  armor = round2(clamp(armor, 0, 0.82));
+  if (sculpture.includes("spines") || sculpture.includes("knobs")) material += 0.04;
+  if (ph.shell && covering !== "shell" && covering !== "plate") material += 0.06;
+  if (ph.stats?.guard != null) material *= 0.9 + 0.15 * statMul(ph.stats.guard);
+  material = round2(clamp(material, 0, 0.82));
+  const armor = round2(armorCut(material));
 
   const wings = countUnits(ph, "wing", "wings");
-  let knockback = 0.12 + Math.min(0.55, factor * 0.14) + armor * 0.28;
+  let knockback = 0.12 + Math.min(0.55, factor * 0.14) + material * 0.28;
   if (massClass === "light" && wings > 0) knockback *= 0.72;
   const knockbackResist = round2(clamp(knockback, 0.05, 0.94));
 
@@ -627,9 +750,11 @@ export function generateDefense(ph: CombatPhenotype): DefenseProfile {
   }
   if (covering === "scale") addResist(elementalResist, "fire", 0.06);
   if (covering === "plate" || covering === "shell" || covering === "chitin") addResist(elementalResist, "metal", 0.08);
+  if (ph.stats?.spirit != null && ph.element) addResist(elementalResist, ph.element, (statMul(ph.stats.spirit) - 1) * 0.22);
 
   const vigor = statMul(ph.stats?.vigor);
-  const hp = Math.max(12, Math.round(64 * factor * (0.75 + 0.4 * vigor) * (1 + armor * 0.55)));
+  const scale = combatScale(factor);
+  const hp = Math.max(36, Math.round(92 * scale * (0.84 + 0.26 * vigor) * (1 + material * 0.35)));
 
   const specials: DefenseSpecial[] = [];
   if (covering === "shell" || covering === "plate" || ph.shell) {
@@ -686,6 +811,7 @@ export function generateDefense(ph: CombatPhenotype): DefenseProfile {
       name: "Relic aegis",
       description: `The ${ph.ascent.relic.kind} answers when the body is pressed.`,
       value: ph.ascent.relic.held ? 0.12 : 0.06,
+      aspect: ph.ascent.relic.use,
     });
   }
   if ((covering === "bark" || ph.element === "plant") && (ph.stats?.vigor ?? 1) >= 1) {
@@ -693,21 +819,36 @@ export function generateDefense(ph: CombatPhenotype): DefenseProfile {
       id: "sap-knit",
       name: "Sap knit",
       description: "Living tissue closes slowly over a shallow wound.",
-      value: round2(0.05),
+      value: round2(massClass === "heavy" ? 0.07 : massClass === "light" ? 0.04 : 0.05),
     });
   }
 
   const weak = Object.entries(elementalResist)
     .filter(([, v]) => v < 0)
     .sort((a, b) => a[1] - b[1])[0];
+  const named = specials.map((s) => {
+    const presented = wardPresentation(s.id, {
+      element: ph.element || "beast",
+      covering,
+      mass: massClass,
+      organ: ph.ascent?.organ,
+      relicMatter: ph.ascent?.relic?.matter,
+      relicUse: ph.ascent?.relic?.use,
+    });
+    return presented ? { ...s, name: presented.name, description: presented.description } : s;
+  });
   const notes = [
     `${title(massClass)} body, ${ph.sizeM.toFixed(2)} m, build ${ph.build ?? "medium"}.`,
-    `${title(covering)} hide stops about ${Math.round(armor * 100)}% of a blow.`,
+    `${title(covering)} hide turns aside about ${Math.round(armor * 100)}% of a blow.`,
   ];
   if (weak) notes.push(`${title(weak[0])} bites harder than the rest.`);
   if (ph.element2) notes.push(`A second element, ${ph.element2}, shares the ward.`);
 
-  return { hp, armor, knockbackResist, elementalResist, specials, massClass, notes };
+  const initiative = ph.stats?.swift != null ? statMul(ph.stats.swift) : undefined;
+  const focus = ph.stats?.focus != null ? statMul(ph.stats.focus) : undefined;
+  const edge = ph.stats?.power != null ? statMul(ph.stats.power) : undefined;
+  const airborne = Boolean(ph.volant) || (wings > 0 && massClass === "light");
+  return { hp, armor, knockbackResist, elementalResist, specials: named, massClass, notes, initiative, focus, edge, airborne };
 }
 
 /** Same body, same kit. A short signature for the ledger. */
