@@ -1496,7 +1496,7 @@
   }
   function ensureDuelStyle() {
     let style = document.getElementById("primordia-duel-style");
-    if (style?.textContent?.includes("primordia-pop")) return;
+    if (style?.textContent?.includes("primordia-calls")) return;
     if (!style) {
       style = document.createElement("style");
       style.id = "primordia-duel-style";
@@ -1515,7 +1515,8 @@
 #primordia-fight i.flash { filter: brightness(3); }
 #primordia-fight p { margin: 0 0 6px; text-align: center; font-size: 18px; line-height: 1.3; }
 #primordia-fight.hurt-l b { text-shadow: 0 0 14px currentColor, 0 1px 2px #000; }
-#primordia-fight.hurt-r div:last-child b { text-shadow: 0 0 14px currentColor, 0 1px 2px #000; }
+#primordia-calls { position: absolute; left: 0; right: 0; bottom: calc(108px + env(safe-area-inset-bottom)); z-index: 12; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; padding: 0 12px; pointer-events: auto; }
+#primordia-calls button { min-height: 36px; border-radius: 999px; border: 1px solid rgba(255,255,255,.28); background: rgba(8,12,14,.72); color: #f4f7f4; font: 600 13px Georgia, "Iowan Old Style", serif; padding: 6px 12px; }
 #primordia-veil { position: absolute; inset: 0; z-index: 4; pointer-events: none; opacity: 0; transition: opacity .5s ease; background: radial-gradient(ellipse at 50% 62%, var(--hit, transparent), transparent 62%); }
 #primordia-veil.on { opacity: .62; transition: none; }
 #primordia-chip { position: absolute; z-index: 9; margin: 0; font: 600 32px Georgia, "Iowan Old Style", serif; pointer-events: none; text-shadow: 0 2px 10px #000, 0 0 16px currentColor; opacity: 0; }
@@ -1599,6 +1600,9 @@
     barL.style.color = tint(left.element);
     barR.style.color = tint(right.element);
     app.append(veil, strip);
+    const calls = document.createElement("div");
+    calls.id = "primordia-calls";
+    app.append(calls);
     const chip = document.createElement("b");
     chip.id = "primordia-chip";
     app.append(chip);
@@ -1680,21 +1684,31 @@
       const striking = slots.some((s) => s.rush > performance.now());
       const canvas2 = document.querySelector("canvas");
       const aspect = canvas2 && canvas2.clientHeight > 40 ? canvas2.clientWidth / canvas2.clientHeight : cam.aspect || 1.5;
-      const fov = cam.fov && cam.fov > 8 ? cam.fov : 32;
-      const halfW = Math.tan(fov * Math.PI / 360) * Math.max(0.42, aspect);
-      const halfSpan = Math.max(0.2, sep * 0.5 + bulk * 0.42);
-      let dist = halfSpan / halfW / (aspect < 0.92 ? 0.9 : 0.78);
-      dist = Math.max(dist, bulk * 1.7, 0.85);
-      if (striking) dist *= 0.88;
-      const lift = dist * (aspect < 0.92 ? 0.22 : striking ? 0.2 : 0.26) + (striking ? drama : 0);
+      const frameFov = homeFov && homeFov > 8 ? homeFov : cam.fov && cam.fov > 8 ? cam.fov : 42;
+      const tanV = Math.tan(frameFov * Math.PI / 360);
+      const tanH = tanV * Math.max(aspect, 0.9);
+      const halfSpan = sep * 0.5 + bulk * 0.22;
+      let dist = halfSpan / Math.max(0.2, tanH);
+      dist = Math.max(bulk * 1.05, Math.min(dist, bulk * 3.2));
+      if (striking) dist *= 0.78;
+      const lift = dist * (striking ? 0.16 : 0.2);
       const jx = (Math.random() - 0.5) * shake2;
       const jz = (Math.random() - 0.5) * shake2;
+      const goalX = mx + orbitSideX * dist + jx;
+      const goalY = my + lift;
+      const goalZ = mz + orbitSideZ * dist + jz;
+      const px0 = cam.position.x ?? goalX;
+      const py0 = cam.position.y ?? goalY;
+      const pz0 = cam.position.z ?? goalZ;
+      const ease = striking ? 0.22 : 0.12;
       try {
         cam.clearViewOffset?.();
       } catch {
       }
-      cam.position.set(mx + orbitSideX * dist + jx, my + lift, mz + orbitSideZ * dist + jz);
+      cam.position.set(px0 + (goalX - px0) * ease, py0 + (goalY - py0) * ease, pz0 + (goalZ - pz0) * ease);
       controls.target.set(mx, my, mz);
+      controls.minDistance = dist * 0.85;
+      controls.maxDistance = dist * 1.08;
       shake2 *= 0.86;
     };
     const hull = (s) => hullOf(s.fig.build?.min, s.fig.build?.max, s.fig.ph?.sizeM ?? 0.8);
@@ -1728,18 +1742,6 @@
     };
     const drive2 = (s, other, dt) => {
       if (s.pose < performance.now() && s.rush < performance.now()) s.press = 0;
-      if (other && s.gait !== "rooted" && s.rush < performance.now()) {
-        const gap = Math.hypot(s.tx - s.x, s.tz - s.z);
-        if (gap < 0.07) {
-          const ang = Math.atan2(s.z - other.z, s.x - other.x);
-          const turn = (s === slots[0] ? 0.85 : -0.85) * dt;
-          const rad = Math.max(0.2, centers(s, other, 0) * 1.08);
-          const na = ang + turn;
-          s.tx = other.x + Math.cos(na) * rad;
-          s.tz = other.z + Math.sin(na) * rad;
-          s.ty = s.foot + (s.gait === "fly" || s.gait === "hover" ? bodyLen(s.fig) * 0.55 : s.gait === "swim" ? bodyLen(s.fig) * 0.2 : 0);
-        }
-      }
       const toX = s.tx - s.x;
       const toZ = s.tz - s.z;
       const dist = Math.hypot(toX, toZ);
@@ -2150,7 +2152,7 @@
             defendSlot.lunge = -Math.min(attackerHull.along * 0.35, away);
             defendSlot.rush = performance.now() + 700;
           }
-          actorSlot.lunge = shape.lunge * attackerHull.along;
+          actorSlot.lunge = Math.max(shape.lunge * attackerHull.along, gap * 0.55);
           actorSlot.rush = performance.now() + 980;
           actorSlot.pose = performance.now() + 1400;
           drama = shape.lift > 0.2 ? 0.35 : shape.ranged ? 0.12 : shape.rear ? -0.08 : 0;
@@ -2328,10 +2330,15 @@
             cam.updateProjectionMatrix?.();
           }
         }
+        if (stage?.controls) {
+          stage.controls.minDistance = 0.05;
+          stage.controls.maxDistance = 80;
+        }
         for (const mark of marks) duelApi()?.unstone(mark?.mesh ?? null);
         marks[0] = null;
         marks[1] = null;
         strip.remove();
+        calls.remove();
         veil.remove();
         chip.remove();
         pop.remove();
@@ -4735,32 +4742,26 @@
     const stage = openBattle(self.companion, foe.companion);
     const waitChoice = () => new Promise((resolve) => {
       const offer = offers(bout);
+      const hostEl = document.getElementById("primordia-calls") ?? host;
       const buttons = offer.attacks.filter((attack) => attack.ready).map((attack) => {
-        const button = el("button", { class: "btn small", type: "button" }, attack.reaches ? attack.name : `${attack.name} \xB7 short`);
+        const button = el("button", { type: "button" }, attack.reaches ? attack.name : `${attack.name} \xB7 short`);
         button.addEventListener("click", () => resolve({ kind: "attack", index: attack.index }));
         return button;
       });
       if (offer.canClose) {
-        const close = el("button", { class: "btn small", type: "button" }, "Step in");
+        const close = el("button", { type: "button" }, "Step in");
         close.addEventListener("click", () => resolve({ kind: "close" }));
         buttons.push(close);
       }
       if (offer.canGuard) {
-        const guard = el("button", { class: "btn small", type: "button" }, "Guard");
+        const guard = el("button", { type: "button" }, "Guard");
         guard.addEventListener("click", () => resolve({ kind: "guard" }));
         buttons.push(guard);
       }
-      const auto = el("button", { class: "btn small", type: "button" }, "Let it choose");
+      const auto = el("button", { type: "button" }, "Let it choose");
       auto.addEventListener("click", () => resolve(autoOrder(bout)));
-      const rest = el("button", { class: "btn small", type: "button" }, "Finish the bout");
-      rest.addEventListener("click", () => resolve("finish"));
-      host.replaceChildren(
-        el("p", {}, `${offer.actorName}'s turn. Gap ${bout.distance.toFixed(1)}.`),
-        el("p", { class: "mono" }, `${self.name} ${bout.leftHp} \xB7 ${foe.name} ${bout.rightHp}`),
-        offer.relicWaiting ? el("p", { class: "muted" }, "A relic is still waiting.") : el("p", { class: "muted" }, "Choose the blow."),
-        el("div", { class: "row" }, ...buttons, auto, rest),
-        el("ul", { class: "list" }, ...bout.log.slice(-6).map((entry) => el("li", {}, entry.text)))
-      );
+      hostEl.replaceChildren(...buttons, auto);
+      window.setTimeout(() => resolve(autoOrder(bout)), 1400);
     });
     try {
       const placed = await stage.ready;
@@ -4790,6 +4791,7 @@
       }
       paintLog(host, boutResult(bout), self, foe);
       stage.finish(bout.winnerId);
+      document.getElementById("primordia-calls")?.replaceChildren();
       done();
     } finally {
       if (token !== showToken) stage.close();

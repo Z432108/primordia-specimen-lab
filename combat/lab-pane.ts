@@ -420,34 +420,28 @@ async function playSteered(
   const waitChoice = (): Promise<Order | "finish"> =>
     new Promise((resolve) => {
       const offer = offers(bout);
+      const hostEl = document.getElementById("primordia-calls") ?? host;
       const buttons = offer.attacks
         .filter((attack) => attack.ready)
         .map((attack) => {
-          const button = el("button", { class: "btn small", type: "button" }, attack.reaches ? attack.name : `${attack.name} · short`);
+          const button = el("button", { type: "button" }, attack.reaches ? attack.name : `${attack.name} · short`);
           button.addEventListener("click", () => resolve({ kind: "attack", index: attack.index }));
           return button;
         });
       if (offer.canClose) {
-        const close = el("button", { class: "btn small", type: "button" }, "Step in");
+        const close = el("button", { type: "button" }, "Step in");
         close.addEventListener("click", () => resolve({ kind: "close" }));
         buttons.push(close);
       }
       if (offer.canGuard) {
-        const guard = el("button", { class: "btn small", type: "button" }, "Guard");
+        const guard = el("button", { type: "button" }, "Guard");
         guard.addEventListener("click", () => resolve({ kind: "guard" }));
         buttons.push(guard);
       }
-      const auto = el("button", { class: "btn small", type: "button" }, "Let it choose");
+      const auto = el("button", { type: "button" }, "Let it choose");
       auto.addEventListener("click", () => resolve(autoOrder(bout)));
-      const rest = el("button", { class: "btn small", type: "button" }, "Finish the bout");
-      rest.addEventListener("click", () => resolve("finish"));
-      host.replaceChildren(
-        el("p", {}, `${offer.actorName}'s turn. Gap ${bout.distance.toFixed(1)}.`),
-        el("p", { class: "mono" }, `${self.name} ${bout.leftHp} · ${foe.name} ${bout.rightHp}`),
-        offer.relicWaiting ? el("p", { class: "muted" }, "A relic is still waiting.") : el("p", { class: "muted" }, "Choose the blow."),
-        el("div", { class: "row" }, ...buttons, auto, rest),
-        el("ul", { class: "list" }, ...bout.log.slice(-6).map((entry) => el("li", {}, entry.text))),
-      );
+      hostEl.replaceChildren(...buttons, auto);
+      window.setTimeout(() => resolve(autoOrder(bout)), 1400);
     });
   try {
     const placed = await stage.ready;
@@ -477,6 +471,7 @@ async function playSteered(
     }
     paintLog(host, boutResult(bout), self, foe);
     stage.finish(bout.winnerId);
+    document.getElementById("primordia-calls")?.replaceChildren();
     done();
   } finally {
     if (token !== showToken) stage.close();
