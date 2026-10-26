@@ -68,11 +68,22 @@ function sheetStats(raw: unknown, ph: CombatPhenotype): CombatPhenotype {
   return { ...ph, stats: values };
 }
 
+function fromGenerator(genome: unknown, stage: string, fallback: unknown, build: unknown): CombatPhenotype | null {
+  const read = (window as unknown as {
+    __lab?: { read?: (body: unknown, stage?: string) => { ph?: unknown } | null };
+  }).__lab?.read;
+  const card = genome && read ? read(genome, stage) : null;
+  const raw = card?.ph ?? fallback;
+  if (!raw) return null;
+  return sheetStats(raw, toCombatPhenotype(raw, { build }));
+}
+
 function currentPhenotype(): CombatPhenotype | null {
   const ctx = lab();
   if (!ctx?.state?.ph) return null;
-  const raw = ctx.state.ph;
-  return inhabit(sheetStats(raw, toCombatPhenotype(raw, { build: ctx.state.build })), ctx);
+  const stage = ctx.state.stage || "Apex";
+  const ph = fromGenerator(ctx.state.genome, stage, ctx.state.ph, ctx.state.build);
+  return ph ? inhabit(ph, ctx) : null;
 }
 
 function lab(): LabCtx | null {
@@ -122,15 +133,20 @@ function remember(id: string, name: string, stage: string, ph: CombatPhenotype, 
 function currentRecord(): Remembered | null {
   const ctx = lab();
   if (!ctx?.state?.ph) return null;
-  const raw = ctx.state.ph;
-  const ph = inhabit(sheetStats(raw, toCombatPhenotype(raw, { build: ctx.state.build })), ctx);
-  const id = ctx.state.genome?.id ?? "current";
   const stage = ctx.state.stage || "Apex";
+  const ph = fromGenerator(ctx.state.genome, stage, ctx.state.ph, ctx.state.build);
+  if (!ph) return null;
+  const lived = inhabit(ph, ctx);
+  const id = ctx.state.genome?.id ?? "current";
   const name = specimenName();
-  const rec = remember(`${id}@${stage}`, name, stage, ph, id);
+  const rec = remember(`${id}@${stage}`, name, stage, lived, id);
   for (const age of LIFE_STAGES) {
     if (age === stage) continue;
-    const aged = scaledPhenotype(ph, stage, age);
+    const agedRaw = ctx.state.genome
+      ? fromGenerator(ctx.state.genome, age, null, ctx.state.build)
+      : scaledPhenotype(lived, stage, age);
+    if (!agedRaw) continue;
+    const aged = ctx.state.genome ? inhabit(agedRaw, ctx) : agedRaw;
     remember(`${id}@${age}`, name, age, aged, id);
   }
   return rec;
@@ -782,3 +798,25 @@ function boot() {
 }
 
 boot();
+
+(window as unknown as { __primordiaCombat?: unknown }).__primordiaCombat = {
+  adopt(ph: unknown) {
+    const mapped = toCombatPhenotype(ph);
+    const attacks = generateAttacks(mapped);
+    const defense = generateDefense(mapped);
+    return {
+      element: mapped.element,
+      element2: mapped.element2 ?? null,
+      covering: mapped.covering.type,
+      plan: mapped.plan ?? "",
+      loco: mapped.loco ?? "",
+      volant: Boolean(mapped.volant),
+      sizeM: mapped.sizeM,
+      stats: mapped.stats ?? null,
+      units: mapped.units.map((u) => ({ unit: u.unit, count: u.count })),
+      attacks: attacks.map((a) => a.template),
+      hp: defense.hp,
+      edge: defense.edge ?? null,
+    };
+  },
+};
