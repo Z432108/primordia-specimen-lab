@@ -814,6 +814,7 @@ boot();
       sizeM: mapped.sizeM,
       stats: mapped.stats ?? null,
       units: mapped.units.map((u) => ({ unit: u.unit, count: u.count })),
+      diet: mapped.diet ?? null,
       attacks: attacks.map((a) => a.template),
       hp: defense.hp,
       edge: defense.edge ?? null,

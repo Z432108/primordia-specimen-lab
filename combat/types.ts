@@ -89,6 +89,12 @@ export interface CombatPhenotype {
   plan?: string;
   volant?: boolean;
   stats?: Record<string, number>;
+  /** The generator's diet. A herbivore does not gain a killing bite from tusks. */
+  diet?: string;
+  mouth?: string;
+  mouths?: number;
+  /** The generator's mass. Denser bodies of the same length are harder to spend. */
+  massKg?: number;
 }
 
 /** Drivers the specimen lab already poses, plus the bite and the generic act. */

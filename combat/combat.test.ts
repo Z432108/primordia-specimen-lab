@@ -240,6 +240,8 @@ describe("adapter", () => {
       head: { teeth: { type: "tusks", count: 2 } },
       body: { fam: "reptile", p: { musc: 180 } },
       line: { vigor: 200, purity: 160, f: 12 },
+      diet: "herbivore",
+      massKg: 210,
       myth: [],
       anomaly: [],
       adapt: [{ id: "heatproof" }],
@@ -262,7 +264,9 @@ describe("adapter", () => {
     assert.equal(mapped.element2, "earth");
     assert.equal(mapped.loco, "QuadGait");
     assert.equal(mapped.ecology, "volcanic");
-    assert.ok(mapped.features?.includes("tusks"));
+    assert.equal(mapped.features?.includes("tusks"), false);
+    assert.equal(mapped.diet, "herbivore");
+    assert.equal(mapped.massKg, 210);
     assert.ok(mapped.features?.includes("heatproof"));
     assert.equal(mapped.units.find((u) => u.unit === "horn")?.count, 2);
     assert.equal(mapped.units.find((u) => u.unit === "spine")?.count, 1);
@@ -276,7 +280,10 @@ describe("adapter", () => {
     assert.ok(mapped.units.some((u) => u.unit === "tail" && u.role === "club"));
     assert.ok(attacks.some((a) => a.element === "fire"));
     assert.ok(attacks.some((a) => a.flags.includes("dual")));
+    assert.equal(attacks.some((a) => a.template === "fang_bite"), false);
     assert.ok(defense.specials.some((s) => s.id === "thorns"));
+    const light = generateDefense(toCombatPhenotype({ ...grown, massKg: 18 }));
+    assert.ok(defense.hp > light.hp);
     assert.ok((defense.edge ?? 1) > 1);
     assert.equal(defense.elementalResist.fire > 0, true);
     assert.equal((defense.elementalResist.water ?? 0) < 0, true);

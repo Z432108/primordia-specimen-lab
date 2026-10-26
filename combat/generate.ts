@@ -429,7 +429,10 @@ export function generateAttacks(ph: CombatPhenotype): Attack[] {
     });
   }
 
-  if (countUnits(ph, "mandible") > 0 || hasFeature(ph, /mandible/)) {
+  const mouthless = ph.mouth === "none" || ph.mouths === 0;
+  const grazer = ph.diet === "herbivore" || ph.diet === "photosynth" || ph.diet === "lithotroph" || ph.diet === "filter" || ph.diet === "detritivore" || ph.diet === "none";
+  const biter = ph.diet === "carnivore" || ph.diet === "insectivore";
+  if (!mouthless && !grazer && (countUnits(ph, "mandible") > 0 || hasFeature(ph, /mandible/))) {
     push(drafts, {
       template: "mandible_shear",
       type: "melee",
@@ -442,7 +445,7 @@ export function generateAttacks(ph: CombatPhenotype): Attack[] {
       flags: ["morph"],
       priority: 0,
     });
-  } else if (hasFeature(ph, /fang|carnass|serrat|needle/)) {
+  } else if (!mouthless && !grazer && (biter || hasFeature(ph, /fang|carnass|serrat|needle|conical/))) {
     push(drafts, {
       template: "fang_bite",
       type: "melee",
@@ -754,7 +757,8 @@ export function generateDefense(ph: CombatPhenotype): DefenseProfile {
 
   const vigor = statMul(ph.stats?.vigor);
   const scale = combatScale(factor);
-  const hp = Math.max(36, Math.round(92 * scale * (0.84 + 0.26 * vigor) * (1 + material * 0.35)));
+  let hp = Math.max(36, Math.round(92 * scale * (0.84 + 0.26 * vigor) * (1 + material * 0.35)));
+  if (ph.massKg) hp = Math.max(36, Math.round(hp * Math.max(0.84, Math.min(1.28, Math.pow(ph.massKg / 48, 0.16)))));
 
   const specials: DefenseSpecial[] = [];
   if (covering === "shell" || covering === "plate" || ph.shell) {

@@ -18,7 +18,7 @@ const SINGULAR: Record<string, string> = {
   legs: "leg",
 };
 
-const FANG_TEETH = new Set(["fangs", "carnassial", "serrated", "needle", "conical", "tusks"]);
+const FANG_TEETH = new Set(["fangs", "carnassial", "serrated", "needle", "conical"]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -164,6 +164,7 @@ export function toCombatPhenotype(input: unknown, hints?: AdapterHints): CombatP
   const head = isRecord(input.head) ? input.head : undefined;
   const teeth = head && isRecord(head.teeth) ? str(head.teeth.type) : str(head?.teeth);
   if (teeth && FANG_TEETH.has(teeth)) features.push(teeth === "fangs" ? "fang" : teeth);
+  if (str(head?.jaw) === "mandibles") features.push("mandible");
 
   const coveringRec = isRecord(input.covering) ? input.covering : undefined;
   const covering = str(coveringRec?.type) ?? str(input.covering) ?? "skin";
@@ -216,5 +217,9 @@ export function toCombatPhenotype(input: unknown, hints?: AdapterHints): CombatP
     plan: str(input.plan),
     volant: input.volant === true || input.volant === 1,
     stats,
+    diet: str(input.diet),
+    mouth: head ? str(head.mouth) : undefined,
+    mouths: head && typeof head.mouths === "number" ? head.mouths : undefined,
+    massKg: typeof input.massKg === "number" && input.massKg > 0 ? input.massKg : undefined,
   };
 }

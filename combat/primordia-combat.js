@@ -2349,7 +2349,7 @@
     ears: "ear",
     legs: "leg"
   };
-  var FANG_TEETH = /* @__PURE__ */ new Set(["fangs", "carnassial", "serrated", "needle", "conical", "tusks"]);
+  var FANG_TEETH = /* @__PURE__ */ new Set(["fangs", "carnassial", "serrated", "needle", "conical"]);
   function isRecord(v) {
     return !!v && typeof v === "object" && !Array.isArray(v);
   }
@@ -2479,6 +2479,7 @@
     const head = isRecord(input.head) ? input.head : void 0;
     const teeth = head && isRecord(head.teeth) ? str(head.teeth.type) : str(head?.teeth);
     if (teeth && FANG_TEETH.has(teeth)) features.push(teeth === "fangs" ? "fang" : teeth);
+    if (str(head?.jaw) === "mandibles") features.push("mandible");
     const coveringRec = isRecord(input.covering) ? input.covering : void 0;
     const covering = str(coveringRec?.type) ?? str(input.covering) ?? "skin";
     const ascentRec = isRecord(input.ascent) ? input.ascent : void 0;
@@ -2521,7 +2522,11 @@
       ecology: str(input.ecology),
       plan: str(input.plan),
       volant: input.volant === true || input.volant === 1,
-      stats
+      stats,
+      diet: str(input.diet),
+      mouth: head ? str(head.mouth) : void 0,
+      mouths: head && typeof head.mouths === "number" ? head.mouths : void 0,
+      massKg: typeof input.massKg === "number" && input.massKg > 0 ? input.massKg : void 0
     };
   }
 
@@ -3618,7 +3623,10 @@
         priority: 0
       });
     }
-    if (countUnits(ph, "mandible") > 0 || hasFeature(ph, /mandible/)) {
+    const mouthless = ph.mouth === "none" || ph.mouths === 0;
+    const grazer = ph.diet === "herbivore" || ph.diet === "photosynth" || ph.diet === "lithotroph" || ph.diet === "filter" || ph.diet === "detritivore" || ph.diet === "none";
+    const biter = ph.diet === "carnivore" || ph.diet === "insectivore";
+    if (!mouthless && !grazer && (countUnits(ph, "mandible") > 0 || hasFeature(ph, /mandible/))) {
       push(drafts, {
         template: "mandible_shear",
         type: "melee",
@@ -3631,7 +3639,7 @@
         flags: ["morph"],
         priority: 0
       });
-    } else if (hasFeature(ph, /fang|carnass|serrat|needle/)) {
+    } else if (!mouthless && !grazer && (biter || hasFeature(ph, /fang|carnass|serrat|needle|conical/))) {
       push(drafts, {
         template: "fang_bite",
         type: "melee",
@@ -3896,7 +3904,8 @@
     if (ph.stats?.spirit != null && ph.element) addResist(elementalResist, ph.element, (statMul(ph.stats.spirit) - 1) * 0.22);
     const vigor = statMul(ph.stats?.vigor);
     const scale = combatScale(factor);
-    const hp = Math.max(36, Math.round(92 * scale * (0.84 + 0.26 * vigor) * (1 + material * 0.35)));
+    let hp = Math.max(36, Math.round(92 * scale * (0.84 + 0.26 * vigor) * (1 + material * 0.35)));
+    if (ph.massKg) hp = Math.max(36, Math.round(hp * Math.max(0.84, Math.min(1.28, Math.pow(ph.massKg / 48, 0.16)))));
     const specials = [];
     if (covering === "shell" || covering === "plate" || ph.shell) {
       specials.push({
@@ -4719,6 +4728,7 @@
         sizeM: mapped.sizeM,
         stats: mapped.stats ?? null,
         units: mapped.units.map((u) => ({ unit: u.unit, count: u.count })),
+        diet: mapped.diet ?? null,
         attacks: attacks.map((a) => a.template),
         hp: defense.hp,
         edge: defense.edge ?? null
