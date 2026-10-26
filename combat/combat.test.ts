@@ -523,6 +523,56 @@ describe("battle", () => {
     assert.notEqual(missed.log.find((e) => e.actorId === "a")?.aside, "The relic meets that blow.");
     assert.equal(caught.log.find((e) => e.actorId === "a")?.aside, "The relic meets that blow.");
   });
+
+  it("keeps a rooted body from closing, a guard for one blow, and a temper on the hide", () => {
+    const hide: DefenseProfile = {
+      hp: 160,
+      armor: 0,
+      knockbackResist: 0.3,
+      elementalResist: {},
+      specials: [],
+      massClass: "medium",
+      notes: [],
+      footing: "mobile",
+    };
+    const bite: Attack = {
+      id: "bite", template: "fang_bite", name: "Bite", type: "melee", element: "beast",
+      basePower: 40, power: 40, range: 1.2, cooldown: 2, animationKey: "jaw_snap", effectStyle: "bite", description: "", flags: [],
+    };
+    const breath: Attack = {
+      id: "breath", template: "breath_stream", name: "Stream", type: "breath", element: "beast",
+      basePower: 18, power: 18, range: 7, cooldown: 3, animationKey: "breath_stream", effectStyle: "stream", description: "", flags: [],
+    };
+    const rooted = resolveBattle(
+      { id: "a", name: "A", attacks: [bite, breath], defense: { ...hide, hp: 40, footing: "rooted" } },
+      { id: "b", name: "B", attacks: [bite], defense: hide },
+      1,
+    );
+    assert.equal(rooted.log.find((e) => e.actorId === "a")?.attackId, "breath");
+    const open = resolveBattle(
+      { id: "a", name: "A", attacks: [bite], defense: { ...hide, hp: 30 } },
+      { id: "b", name: "B", attacks: [bite], defense: hide },
+      1,
+    );
+    const braced = resolveBattle(
+      { id: "a", name: "A", attacks: [bite], defense: { ...hide, hp: 30 } },
+      { id: "b", name: "B", attacks: [bite], defense: { ...hide, brace: 0.1 } },
+      1,
+    );
+    const plain = open.log.find((e) => e.actorId === "a")!;
+    const held = braced.log.find((e) => e.actorId === "a")!;
+    assert.ok(held.damage < plain.damage);
+    assert.equal(held.aside, "It sets against the blow.");
+    const twice: Attack = { ...bite, hits: 2, power: 10, basePower: 10 };
+    const pair = resolveBattle(
+      { id: "a", name: "A", attacks: [twice], defense: { ...hide, hp: 20 } },
+      { id: "b", name: "B", attacks: [twice], defense: hide },
+      1,
+    );
+    assert.equal(pair.log.find((e) => e.actorId === "a")?.hits, 2);
+    const temper = generateDefense(ph({ element: "fire", sizeM: 1.2, covering: { type: "skin" } }));
+    assert.ok(temper.specials.some((s) => s.id === "temper"));
+  });
 });
 
 describe("the field", () => {

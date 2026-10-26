@@ -818,6 +818,14 @@ export function generateDefense(ph: CombatPhenotype): DefenseProfile {
       aspect: ph.ascent.relic.use,
     });
   }
+  if (ph.element) {
+    specials.push({
+      id: "temper",
+      name: "Temper",
+      description: "What matches this element bites less. What opposes it bites more.",
+      value: 0.2,
+    });
+  }
   if ((covering === "bark" || ph.element === "plant") && (ph.stats?.vigor ?? 1) >= 1) {
     specials.push({
       id: "sap-knit",
@@ -852,7 +860,11 @@ export function generateDefense(ph: CombatPhenotype): DefenseProfile {
   const focus = ph.stats?.focus != null ? statMul(ph.stats.focus) : undefined;
   const edge = ph.stats?.power != null ? statMul(ph.stats.power) : undefined;
   const airborne = Boolean(ph.volant) || (wings > 0 && massClass === "light");
-  return { hp, armor, knockbackResist, elementalResist, specials: named, massClass, notes, initiative, focus, edge, airborne };
+  const footing: DefenseProfile["footing"] =
+    ph.loco === "Sessile" || ph.plan === "sessile_mass" || ph.plan === "sessile_radial" ? "rooted" : "mobile";
+  const brace = ph.stats?.guard != null && statMul(ph.stats.guard) >= 1.12 ? 0.1 : undefined;
+  const sheet = ph.stats && Object.values(ph.stats).some((v) => v > 3) ? { ...ph.stats } : undefined;
+  return { hp, armor, knockbackResist, elementalResist, specials: named, massClass, notes, initiative, focus, edge, airborne, footing, brace, sheet };
 }
 
 /** Same body, same kit. A short signature for the ledger. */

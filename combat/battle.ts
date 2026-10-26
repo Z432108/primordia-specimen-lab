@@ -24,6 +24,7 @@ export interface BattleEvent {
   fxSeed?: number;
   /** A short clause when a rule of the body changed the blow. */
   aside?: string;
+  hits?: number;
 }
 
 export interface BattleResult {
@@ -121,6 +122,7 @@ interface Side {
   cd: number[];
   dots: Dot[];
   aegisUsed: boolean;
+  braced: boolean;
 }
 
 /** Highest power, unless this body can read. Then it spends the blow the hide answers worst. */
@@ -131,7 +133,10 @@ function choose(side: Side, foe: Side): number {
   side.fighter.attacks.forEach((attack, i) => {
     if ((side.cd[i] ?? 0) > 0) return;
     const priority = attack.flags.includes("priority") ? 6 : 0;
-    const s = (read ? strikeDamage(attack, foe.fighter.defense) : attack.power) + priority;
+    let s = (read ? strikeDamage(attack, foe.fighter.defense) : attack.power) + priority;
+    const rooted = side.fighter.defense.footing === "rooted" && foe.fighter.defense.footing !== "rooted";
+    const short = (attack.type === "melee" || attack.type === "slam") && attack.range < 3;
+    if (rooted && short) s *= 0.4;
     if (s > score) {
       score = s;
       best = i;
@@ -146,8 +151,8 @@ function choose(side: Side, foe: Side): number {
  */
 export function resolveBattle(a: BattleFighter, b: BattleFighter, maxTurns = 16): BattleResult {
   const sides: [Side, Side] = [
-    { fighter: a, hp: a.defense.hp, cd: a.attacks.map(() => 0), dots: [], aegisUsed: false },
-    { fighter: b, hp: b.defense.hp, cd: b.attacks.map(() => 0), dots: [], aegisUsed: false },
+    { fighter: a, hp: a.defense.hp, cd: a.attacks.map(() => 0), dots: [], aegisUsed: false, braced: false },
+    { fighter: b, hp: b.defense.hp, cd: b.attacks.map(() => 0), dots: [], aegisUsed: false, braced: false },
   ];
   const log: BattleEvent[] = [];
   let actor = a.defense.hp < b.defense.hp ? 0 : b.defense.hp < a.defense.hp ? 1 : (a.defense.initiative ?? 1) >= (b.defense.initiative ?? 1) ? 0 : 1;
@@ -270,6 +275,22 @@ export function resolveBattle(a: BattleFighter, b: BattleFighter, maxTurns = 16)
         aside.push("The wings shed it.");
       }
     }
+    const cannotClose =
+      self.fighter.defense.footing === "rooted" &&
+      foe.fighter.defense.footing !== "rooted" &&
+      (attack.type === "melee" || attack.type === "slam") &&
+      attack.range < 3;
+    if (cannotClose) {
+      damage = Math.max(1, Math.round(damage * 0.72));
+      aside.push("It cannot close.");
+    }
+    if (foe.fighter.defense.brace && !foe.braced) {
+      const cut = Math.max(1, Math.round(damage * foe.fighter.defense.brace));
+      damage = Math.max(1, damage - cut);
+      foe.braced = true;
+      aside.push("It sets against the blow.");
+    }
+    if ((attack.hits ?? 1) > 1) aside.push(`It lands ${attack.hits} times.`);
     foe.hp = Math.max(0, foe.hp - damage);
     self.cd[index] = Math.max(1, attack.cooldown - ((self.fighter.defense.focus ?? 1) >= 1.12 ? 1 : 0));
     if (attack.type === "dot" || attack.flags.includes("echo")) {
@@ -310,6 +331,7 @@ export function resolveBattle(a: BattleFighter, b: BattleFighter, maxTurns = 16)
       fxMotion: attack.fxMotion,
       fxSeed: attack.fxSeed,
       aside: lead,
+      hits: attack.hits,
       text: ko
         ? `${self.fighter.name} uses ${attack.name} for ${damage}. ${foe.fighter.name} falls.${extra}`
         : `${self.fighter.name} uses ${attack.name} for ${damage}. ${foe.fighter.name} ${hold ? "holds" : "gives ground"} (${foe.hp} left).${extra}`,

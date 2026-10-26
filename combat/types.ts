@@ -54,6 +54,12 @@ export interface DefenseProfile {
   focus?: number;
   /** Light wings, or a body that is already aloft. Ground slams meet less of it. */
   airborne?: boolean;
+  /** A body that cannot step in. Short blows from it do less, unless the other cannot step away. */
+  footing?: "rooted" | "mobile";
+  /** Set once, from a high guard, against the first blow that lands. */
+  brace?: number;
+  /** The sheet's six numbers, when the generator wrote them. */
+  sheet?: Record<string, number>;
 }
 
 export interface CombatUnit {

@@ -2197,6 +2197,15 @@
           hitFrom = from;
           hitTo = to;
           api.flash(to.x, to.y, to.z, color, power);
+          const times = Math.max(1, Math.min(3, event.hits ?? 1));
+          for (let n = 1; n < times; n++) {
+            window.setTimeout(() => {
+              try {
+                api.flash(to.x, to.y, to.z, color, power * 0.75);
+              } catch {
+              }
+            }, n * 150);
+          }
           if (shape.ranged || event.attackId === "dot") api.bolt(from.x, from.y, from.z, to.x, to.y, to.z, color);
           const ring2 = Math.max(0.16, hull(defendSlot).across * (shape.lift > 0.2 ? 1.45 : 1.05));
           const sparks = shape.ranged ? 3 : 5;
@@ -2601,7 +2610,10 @@
     side.fighter.attacks.forEach((attack, i) => {
       if ((side.cd[i] ?? 0) > 0) return;
       const priority = attack.flags.includes("priority") ? 6 : 0;
-      const s = (read ? strikeDamage(attack, foe.fighter.defense) : attack.power) + priority;
+      let s = (read ? strikeDamage(attack, foe.fighter.defense) : attack.power) + priority;
+      const rooted = side.fighter.defense.footing === "rooted" && foe.fighter.defense.footing !== "rooted";
+      const short = (attack.type === "melee" || attack.type === "slam") && attack.range < 3;
+      if (rooted && short) s *= 0.4;
       if (s > score) {
         score = s;
         best = i;
@@ -2611,8 +2623,8 @@
   }
   function resolveBattle(a, b, maxTurns = 16) {
     const sides = [
-      { fighter: a, hp: a.defense.hp, cd: a.attacks.map(() => 0), dots: [], aegisUsed: false },
-      { fighter: b, hp: b.defense.hp, cd: b.attacks.map(() => 0), dots: [], aegisUsed: false }
+      { fighter: a, hp: a.defense.hp, cd: a.attacks.map(() => 0), dots: [], aegisUsed: false, braced: false },
+      { fighter: b, hp: b.defense.hp, cd: b.attacks.map(() => 0), dots: [], aegisUsed: false, braced: false }
     ];
     const log = [];
     let actor = a.defense.hp < b.defense.hp ? 0 : b.defense.hp < a.defense.hp ? 1 : (a.defense.initiative ?? 1) >= (b.defense.initiative ?? 1) ? 0 : 1;
@@ -2731,6 +2743,18 @@
           aside.push("The wings shed it.");
         }
       }
+      const cannotClose = self.fighter.defense.footing === "rooted" && foe.fighter.defense.footing !== "rooted" && (attack.type === "melee" || attack.type === "slam") && attack.range < 3;
+      if (cannotClose) {
+        damage = Math.max(1, Math.round(damage * 0.72));
+        aside.push("It cannot close.");
+      }
+      if (foe.fighter.defense.brace && !foe.braced) {
+        const cut = Math.max(1, Math.round(damage * foe.fighter.defense.brace));
+        damage = Math.max(1, damage - cut);
+        foe.braced = true;
+        aside.push("It sets against the blow.");
+      }
+      if ((attack.hits ?? 1) > 1) aside.push(`It lands ${attack.hits} times.`);
       foe.hp = Math.max(0, foe.hp - damage);
       self.cd[index] = Math.max(1, attack.cooldown - ((self.fighter.defense.focus ?? 1) >= 1.12 ? 1 : 0));
       if (attack.type === "dot" || attack.flags.includes("echo")) {
@@ -2771,6 +2795,7 @@
         fxMotion: attack.fxMotion,
         fxSeed: attack.fxSeed,
         aside: lead,
+        hits: attack.hits,
         text: ko ? `${self.fighter.name} uses ${attack.name} for ${damage}. ${foe.fighter.name} falls.${extra}` : `${self.fighter.name} uses ${attack.name} for ${damage}. ${foe.fighter.name} ${hold ? "holds" : "gives ground"} (${foe.hp} left).${extra}`
       });
       if (self.hp <= 0) break;
@@ -3964,6 +3989,14 @@
         aspect: ph.ascent.relic.use
       });
     }
+    if (ph.element) {
+      specials.push({
+        id: "temper",
+        name: "Temper",
+        description: "What matches this element bites less. What opposes it bites more.",
+        value: 0.2
+      });
+    }
     if ((covering === "bark" || ph.element === "plant") && (ph.stats?.vigor ?? 1) >= 1) {
       specials.push({
         id: "sap-knit",
@@ -3994,7 +4027,10 @@
     const focus = ph.stats?.focus != null ? statMul(ph.stats.focus) : void 0;
     const edge = ph.stats?.power != null ? statMul(ph.stats.power) : void 0;
     const airborne = Boolean(ph.volant) || wings > 0 && massClass === "light";
-    return { hp, armor, knockbackResist, elementalResist, specials: named2, massClass, notes, initiative, focus, edge, airborne };
+    const footing = ph.loco === "Sessile" || ph.plan === "sessile_mass" || ph.plan === "sessile_radial" ? "rooted" : "mobile";
+    const brace = ph.stats?.guard != null && statMul(ph.stats.guard) >= 1.12 ? 0.1 : void 0;
+    const sheet = ph.stats && Object.values(ph.stats).some((v) => v > 3) ? { ...ph.stats } : void 0;
+    return { hp, armor, knockbackResist, elementalResist, specials: named2, massClass, notes, initiative, focus, edge, airborne, footing, brace, sheet };
   }
   function kitSignature(attacks, defense) {
     const raw = [
@@ -4157,7 +4193,11 @@
         el("dt", {}, "Mass"),
         el("dd", {}, defense.massClass),
         el("dt", {}, "Knockback"),
-        el("dd", { class: "mono" }, pct(defense.knockbackResist))
+        el("dd", { class: "mono" }, pct(defense.knockbackResist)),
+        ...defense.sheet ? ["power", "guard", "swift", "focus", "vigor", "spirit"].flatMap((key) => [
+          el("dt", {}, key),
+          el("dd", { class: "mono" }, String(defense.sheet?.[key] ?? "\u2014"))
+        ]) : []
       ),
       chips.length ? el("div", { class: "chips" }, ...chips) : el("p", { class: "muted" }, "No marked elemental ward."),
       specials,

@@ -205,6 +205,12 @@ function defenseBlock(defense: DefenseProfile): HTMLElement {
       el("dd", {}, defense.massClass),
       el("dt", {}, "Knockback"),
       el("dd", { class: "mono" }, pct(defense.knockbackResist)),
+      ...(defense.sheet
+        ? (["power", "guard", "swift", "focus", "vigor", "spirit"] as const).flatMap((key) => [
+            el("dt", {}, key),
+            el("dd", { class: "mono" }, String(defense.sheet?.[key] ?? "—")),
+          ])
+        : []),
     ),
     chips.length ? el("div", { class: "chips" }, ...chips) : el("p", { class: "muted" }, "No marked elemental ward."),
     specials,

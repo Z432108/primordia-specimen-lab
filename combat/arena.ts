@@ -128,6 +128,7 @@ export interface BlowView {
   animationKey?: string;
   damage?: number;
   aside?: string;
+  hits?: number;
 }
 
 export interface Aim {
@@ -1502,6 +1503,16 @@ export function openBattle(left: Companion, right: Companion): BattleStage {
         hitFrom = from;
         hitTo = to;
         api.flash(to.x, to.y, to.z, color, power);
+        const times = Math.max(1, Math.min(3, event.hits ?? 1));
+        for (let n = 1; n < times; n++) {
+          window.setTimeout(() => {
+            try {
+              api.flash(to.x, to.y, to.z, color, power * 0.75);
+            } catch {
+              /* the light has already gone */
+            }
+          }, n * 150);
+        }
         if (shape.ranged || event.attackId === "dot") api.bolt(from.x, from.y, from.z, to.x, to.y, to.z, color);
         const ring = Math.max(0.16, hull(defendSlot).across * (shape.lift > 0.2 ? 1.45 : 1.05));
         const sparks = shape.ranged ? 3 : 5;
