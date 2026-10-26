@@ -885,7 +885,10 @@ function boot() {
 
 boot();
 
-(window as unknown as { __primordiaCombat?: unknown }).__primordiaCombat = {
+const combatWindow = window as unknown as { __primordiaCombat?: { pane?: typeof pane; adopt?: (ph: unknown) => unknown } };
+combatWindow.__primordiaCombat = {
+  ...combatWindow.__primordiaCombat,
+  pane,
   adopt(ph: unknown) {
     const mapped = toCombatPhenotype(ph);
     const attacks = generateAttacks(mapped);

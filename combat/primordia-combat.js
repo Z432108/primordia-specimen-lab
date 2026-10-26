@@ -4980,7 +4980,10 @@
     if (ctx.state?.ph) currentRecord();
   }
   boot();
-  window.__primordiaCombat = {
+  var combatWindow = window;
+  combatWindow.__primordiaCombat = {
+    ...combatWindow.__primordiaCombat,
+    pane,
     adopt(ph) {
       const mapped = toCombatPhenotype(ph);
       const attacks = generateAttacks(mapped);
