@@ -1,7 +1,7 @@
 import { performAttack, playAttack } from "./animate.ts";
 import { companionOf, LIFE_STAGES, openBattle, scaledPhenotype, type Aim, type Companion } from "./arena.ts";
 import { toCombatPhenotype } from "./adapter.ts";
-import { autoOrder, boutResult, commit, finishBout, offers, openRound, startBout, type BattleEvent, type BattleFighter, type BattleResult, type Order } from "./battle.ts";
+import { autoOrder, boutResult, commit, finishBout, offers, openRound, resolveBattle, startBout, type BattleEvent, type BattleFighter, type BattleResult, type Order } from "./battle.ts";
 import { ATTACK_LEXICON, ELEMENTS, fieldHash, MOTIONS, WARD_LEXICON, type Technique } from "./catalogue.ts";
 import { playFx } from "./fx.ts";
 import { generateAttacks, generateDefense, kitSignature, techniqueBorne } from "./generate.ts";
@@ -907,6 +907,109 @@ combatWindow.__primordiaCombat = {
       attacks: attacks.map((a) => a.template),
       hp: defense.hp,
       edge: defense.edge ?? null,
+    };
+  },
+  audit(leftRaw: unknown, rightRaw: unknown) {
+    const issues: string[] = [];
+    const note = (s: string) => issues.push(s);
+    let left: CombatPhenotype;
+    let right: CombatPhenotype;
+    try {
+      left = toCombatPhenotype(leftRaw);
+      right = toCombatPhenotype(rightRaw);
+    } catch (err) {
+      return { issues: [`map threw ${err}`], ok: false };
+    }
+    const checkPh = (label: string, raw: unknown, ph: CombatPhenotype) => {
+      const src = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+      if (ph.element !== src.element) note(`${label} element ${ph.element} != ${src.element}`);
+      const e2 = src.element2 || null;
+      if ((ph.element2 ?? null) !== e2) note(`${label} element2`);
+      const cover = src.covering && typeof src.covering === "object" ? (src.covering as { type?: string }).type : undefined;
+      if (cover && ph.covering.type !== cover) note(`${label} covering`);
+      if (!(ph.sizeM > 0) || !Number.isFinite(ph.sizeM)) note(`${label} size`);
+      const stats = ph.stats;
+      if (stats) {
+        for (const key of ["power", "guard", "swift", "focus", "vigor", "spirit"]) {
+          const n = stats[key];
+          if (n == null || !Number.isFinite(n) || n < 1 || n > 100) note(`${label} stat ${key}=${n}`);
+        }
+      } else note(`${label} no sheet`);
+      const diet = typeof src.diet === "string" ? src.diet : "";
+      const grazer = ["herbivore", "photosynth", "lithotroph", "filter", "detritivore", "none"].includes(diet);
+      const mouthless = src.head && typeof src.head === "object" && ((src.head as { mouth?: string }).mouth === "none" || (src.head as { mouths?: number }).mouths === 0);
+      let attacks: ReturnType<typeof generateAttacks>;
+      let defense: ReturnType<typeof generateDefense>;
+      try {
+        attacks = generateAttacks(ph);
+        defense = generateDefense(ph);
+      } catch (err) {
+        note(`${label} kit threw ${err}`);
+        return null;
+      }
+      if (attacks.length < 3 || attacks.length > 6) note(`${label} kit ${attacks.length}`);
+      const ids = new Set(attacks.map((a) => a.id));
+      if (ids.size !== attacks.length) note(`${label} duplicate ids`);
+      for (const attack of attacks) {
+        if (!Number.isFinite(attack.power) || attack.power <= 0) note(`${label} power ${attack.name}`);
+        if (!Number.isFinite(attack.range) || attack.range <= 0) note(`${label} range ${attack.name}`);
+        if (!Number.isFinite(attack.cooldown) || attack.cooldown < 1) note(`${label} cooldown ${attack.name}`);
+      }
+      if (grazer && attacks.some((a) => a.template === "fang_bite")) note(`${label} grazer bite`);
+      if (mouthless && attacks.some((a) => a.template === "fang_bite" || a.template === "mandible_shear")) note(`${label} mouthless bite`);
+      if (!Number.isFinite(defense.hp) || defense.hp < 36) note(`${label} hp ${defense.hp}`);
+      if (!Number.isFinite(defense.armor) || defense.armor < 0 || defense.armor > 0.82) note(`${label} armor`);
+      return { attacks, defense };
+    };
+    const kitA = checkPh("A", leftRaw, left);
+    const kitB = checkPh("B", rightRaw, right);
+    if (!kitA || !kitB) return { issues, ok: false };
+    const fighter = (id: string, name: string, kit: NonNullable<typeof kitA>): BattleFighter => ({
+      id,
+      name,
+      attacks: kit.attacks,
+      defense: kit.defense,
+    });
+    let result: BattleResult;
+    try {
+      result = resolveBattle(fighter("a", "A", kitA), fighter("b", "B", kitB), 24);
+    } catch (err) {
+      note(`resolve threw ${err}`);
+      return { issues, ok: false };
+    }
+    if (!Number.isFinite(result.leftHp) || !Number.isFinite(result.rightHp)) note("hp not finite");
+    if (result.leftHp < 0 || result.rightHp < 0) note("negative hp");
+    if (result.winnerId === "a" && result.leftHp <= 0 && result.rightHp > 0) note("winner is dead");
+    if (result.winnerId === "b" && result.rightHp <= 0 && result.leftHp > 0) note("winner is dead");
+    if (result.leftHp <= 0 && result.rightHp <= 0) note("both dead");
+    let seen = 0;
+    for (const event of result.log) {
+      seen += 1;
+      if (!Number.isFinite(event.damage) || event.damage < 0) note(`bad damage ${event.attackName}`);
+      if (event.attackId !== "knit" && event.attackId !== "dot" && event.damage > Math.max(kitA.defense.hp, kitB.defense.hp)) note("damage above either body");
+    }
+    if (seen > 80) note(`log ${seen}`);
+    let played: BattleResult | null = null;
+    try {
+      const bout = startBout(fighter("a", "A", kitA), fighter("b", "B", kitB), left.ecology);
+      finishBout(bout);
+      played = boutResult(bout);
+      if (!played || played.log.length > 120) note(`play log ${played?.log.length}`);
+      if (played.leftHp < 0 || played.rightHp < 0) note("play negative hp");
+      const landed = played.log.filter((e) => e.damage > 0 && e.attackId !== "dot" && e.attackId !== "knit");
+      const whiff = played.log.filter((e) => e.aside === "It falls short.");
+      if (played.log.length > 8 && landed.length === 0) note(`no blow landed (${whiff.length} short)`);
+    } catch (err) {
+      note(`play threw ${err}`);
+    }
+    return {
+      issues,
+      ok: issues.length === 0,
+      winner: result.winnerId,
+      rounds: result.rounds,
+      leftHp: result.leftHp,
+      rightHp: result.rightHp,
+      playRounds: played?.rounds ?? null,
     };
   },
 };

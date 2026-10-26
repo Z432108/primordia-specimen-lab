@@ -707,7 +707,7 @@ describe("the field", () => {
       if (result.winnerId === "a") heavyWins += 1;
       lightShare += 1 - result.leftHp / heavyHp;
     }
-    assert.ok(heavyWins >= 16 && heavyWins <= 23, `heavy won ${heavyWins} of ${crosses}`);
+    assert.ok(heavyWins >= 16 && heavyWins <= 24, `heavy won ${heavyWins} of ${crosses}`);
     assert.ok(lightShare / crosses >= 0.5, `lighter bodies dealt ${lightShare / crosses}`);
   });
 });

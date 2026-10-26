@@ -327,7 +327,7 @@ export function resolveBattle(a: BattleFighter, b: BattleFighter, maxTurns = 16)
     }
     const thorn = foe.fighter.defense.specials.find((s) => s.id === "thorns");
     let reflected = 0;
-    if (thorn && damage > 0) {
+    if (thorn && damage > 0 && foe.hp > 0) {
       reflected = Math.min(
         Math.round(damage * Math.min(0.1, thorn.value)),
         Math.round(self.fighter.defense.hp * 0.06),
@@ -646,10 +646,11 @@ export function commit(bout: Bout, order: Order): BattleEvent[] {
         });
       }
       shares.forEach((part, n) => {
+        if (foe.hp <= 0) return;
         foe.hp = Math.max(0, foe.hp - part);
         const thorn = foe.fighter.defense.specials.find((s) => s.id === "thorns");
         let reflected = 0;
-        if (thorn && part > 0) {
+        if (thorn && part > 0 && foe.hp > 0) {
           reflected = Math.min(Math.round(part * Math.min(0.1, thorn.value)), Math.round(self.fighter.defense.hp * 0.06));
           if (reflected > 0) self.hp = Math.max(0, self.hp - reflected);
         }
