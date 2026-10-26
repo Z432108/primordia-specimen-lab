@@ -1,7 +1,7 @@
 import { performAttack, playAttack } from "./animate.ts";
 import { companionOf, LIFE_STAGES, openBattle, scaledPhenotype, type Aim, type Companion } from "./arena.ts";
 import { toCombatPhenotype } from "./adapter.ts";
-import { resolveBattle, type BattleEvent, type BattleFighter, type BattleResult } from "./battle.ts";
+import { autoOrder, boutResult, commit, finishBout, offers, openRound, startBout, type BattleEvent, type BattleFighter, type BattleResult, type Order } from "./battle.ts";
 import { ATTACK_LEXICON, ELEMENTS, fieldHash, MOTIONS, WARD_LEXICON, type Technique } from "./catalogue.ts";
 import { playFx } from "./fx.ts";
 import { generateAttacks, generateDefense, kitSignature, techniqueBorne } from "./generate.ts";
@@ -354,9 +354,8 @@ function battleBlock(self: Remembered): HTMLElement {
     const token = ++showToken;
     const left: BattleFighter = { id: a.id, name: a.name, attacks: a.attacks, defense: a.defense };
     const right: BattleFighter = { id: b.id, name: b.name, attacks: b.attacks, defense: b.defense };
-    const result = resolveBattle(left, right);
     go.setAttribute("disabled", "");
-    void playLog(token, logHost, result, a, b, () => {
+    void playSteered(token, logHost, left, right, a, b, () => {
       go.removeAttribute("disabled");
     });
   });
@@ -378,6 +377,8 @@ function battleBlock(self: Remembered): HTMLElement {
 }
 
 function showBlow(event: BattleEvent, self: Remembered, foe: Remembered, aim?: Aim) {
+  if (event.attackId === "close") return;
+  if (event.damage === 0 && event.attackId !== "guard" && event.attackId !== "knit") return;
   const dueling = (window as unknown as { __primordiaDuel?: boolean }).__primordiaDuel;
   const ctx = lab();
   const actor = event.actorId === self.id ? self : foe;
@@ -402,6 +403,85 @@ function showBlow(event: BattleEvent, self: Remembered, foe: Remembered, aim?: A
     from: aim?.from,
     toward: aim?.to,
   });
+}
+
+async function playSteered(
+  token: number,
+  host: HTMLElement,
+  left: BattleFighter,
+  right: BattleFighter,
+  self: Remembered,
+  foe: Remembered,
+  done: () => void,
+) {
+  const ground = self.companion.ecology || foe.companion.ecology || "";
+  const bout = startBout(left, right, ground || undefined);
+  const stage = openBattle(self.companion, foe.companion);
+  const waitChoice = (): Promise<Order | "finish"> =>
+    new Promise((resolve) => {
+      const offer = offers(bout);
+      const buttons = offer.attacks
+        .filter((attack) => attack.ready)
+        .map((attack) => {
+          const button = el("button", { class: "btn small", type: "button" }, attack.reaches ? attack.name : `${attack.name} · short`);
+          button.addEventListener("click", () => resolve({ kind: "attack", index: attack.index }));
+          return button;
+        });
+      if (offer.canClose) {
+        const close = el("button", { class: "btn small", type: "button" }, "Step in");
+        close.addEventListener("click", () => resolve({ kind: "close" }));
+        buttons.push(close);
+      }
+      if (offer.canGuard) {
+        const guard = el("button", { class: "btn small", type: "button" }, "Guard");
+        guard.addEventListener("click", () => resolve({ kind: "guard" }));
+        buttons.push(guard);
+      }
+      const auto = el("button", { class: "btn small", type: "button" }, "Let it choose");
+      auto.addEventListener("click", () => resolve(autoOrder(bout)));
+      const rest = el("button", { class: "btn small", type: "button" }, "Finish the bout");
+      rest.addEventListener("click", () => resolve("finish"));
+      host.replaceChildren(
+        el("p", {}, `${offer.actorName}'s turn. Gap ${bout.distance.toFixed(1)}.`),
+        el("p", { class: "mono" }, `${self.name} ${bout.leftHp} · ${foe.name} ${bout.rightHp}`),
+        offer.relicWaiting ? el("p", { class: "muted" }, "A relic is still waiting.") : el("p", { class: "muted" }, "Choose the blow."),
+        el("div", { class: "row" }, ...buttons, auto, rest),
+        el("ul", { class: "list" }, ...bout.log.slice(-6).map((entry) => el("li", {}, entry.text))),
+      );
+    });
+  try {
+    const placed = await stage.ready;
+    if (token !== showToken) return;
+    while (!bout.over && token === showToken) {
+      const opened = openRound(bout);
+      for (const event of opened) {
+        if (token !== showToken) return;
+        const aim = stage.blow(event);
+        showBlow(event, self, foe, aim);
+      }
+      if (bout.over) break;
+      const choice = await waitChoice();
+      if (token !== showToken) return;
+      const events = choice === "finish" ? finishBout(bout) : commit(bout, choice);
+      for (const event of events) {
+        if (token !== showToken) return;
+        host.replaceChildren(
+          el("p", { class: "mono" }, `${self.name} ${bout.leftHp} · ${foe.name} ${bout.rightHp}`),
+          el("ul", { class: "list" }, ...bout.log.slice(-6).map((entry, n, all) => el("li", { class: n === all.length - 1 ? "combat-now" : "" }, entry.text))),
+        );
+        const aim = stage.blow(event);
+        showBlow(event, self, foe, aim);
+        const ok = await sleep(choice === "finish" ? 700 : placed ? 1600 : 900, token);
+        if (!ok) return;
+      }
+    }
+    paintLog(host, boutResult(bout), self, foe);
+    stage.finish(bout.winnerId);
+    done();
+  } finally {
+    if (token !== showToken) stage.close();
+    else window.setTimeout(() => stage.close(), 1400);
+  }
 }
 
 async function playLog(

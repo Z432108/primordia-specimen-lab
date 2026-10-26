@@ -1412,7 +1412,12 @@ export function openBattle(left: Companion, right: Companion): BattleStage {
       }
       const actorSlot = slots[actorIsLeft ? 0 : 1];
       const defendSlot = slots[actorIsLeft ? 1 : 0];
-      if (actorSlot && defendSlot && event.attackId !== "knit" && event.attackId !== "dot") {
+      const quiet = event.attackId === "knit" || event.attackId === "dot" || event.attackId === "close" || event.attackId === "guard" || event.damage === 0;
+      if (event.attackId === "close") {
+        if (actorIsLeft && slots[0]) slots[0].tx += 0.7;
+        if (!actorIsLeft && slots[1]) slots[1].tx -= 0.7;
+      }
+      if (actorSlot && defendSlot && !quiet) {
         const shape = strikeOf(event.fxMotion ?? "", key);
         const attackerHull = hull(actorSlot);
         const weapon = shape.weapon * Math.max(attackerHull.along, attackerHull.across);

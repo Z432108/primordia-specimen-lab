@@ -2106,7 +2106,12 @@
         }
         const actorSlot = slots[actorIsLeft ? 0 : 1];
         const defendSlot = slots[actorIsLeft ? 1 : 0];
-        if (actorSlot && defendSlot && event.attackId !== "knit" && event.attackId !== "dot") {
+        const quiet = event.attackId === "knit" || event.attackId === "dot" || event.attackId === "close" || event.attackId === "guard" || event.damage === 0;
+        if (event.attackId === "close") {
+          if (actorIsLeft && slots[0]) slots[0].tx += 0.7;
+          if (!actorIsLeft && slots[1]) slots[1].tx -= 0.7;
+        }
+        if (actorSlot && defendSlot && !quiet) {
           const shape = strikeOf(event.fxMotion ?? "", key);
           const attackerHull = hull(actorSlot);
           const weapon = shape.weapon * Math.max(attackerHull.along, attackerHull.across);
@@ -2570,10 +2575,18 @@
     let armor = attack.type === "breath" || attack.type === "projectile" ? 0.86 : 1;
     let power = 1;
     const motion = attack.fxMotion;
-    if (motion === "bite" || motion === "grind") armor += 0.06;
-    else if (motion === "lash" || motion === "volley" || motion === "rain" || motion === "sting") armor -= 0.04;
+    if (motion === "bite") armor += 0.08;
+    else if (motion === "grind") {
+      armor += 0.02;
+      power += 0.05;
+    } else if (motion === "lash" || motion === "volley" || motion === "rain" || motion === "sting") armor -= 0.04;
     else if (motion === "stream" || motion === "spiral" || motion === "sigil") armor -= 0.03;
-    else if (motion === "charge" || motion === "thrust" || motion === "slam") power += 0.04;
+    else if (motion === "charge") power += 0.06;
+    else if (motion === "thrust") power += 0.03;
+    else if (motion === "slam") power += 0.05;
+    else if (motion === "chain") power += 0.04;
+    else if (motion === "cyclone" || motion === "vortex") power -= 0.03;
+    else if (motion === "pulse" || motion === "arc") power += 0.03;
     else if (motion === "cone" || motion === "burst" || motion === "wing") power += 0.03;
     else if (motion === "yank" || motion === "brume" || motion === "wall") power -= 0.05;
     if (attack.flags.includes("venom") && attack.type !== "dot") power -= 0.04;
@@ -2603,215 +2616,396 @@
     if (aspect === "steady") return attack.type === "slam" || attack.fxMotion === "charge" || attack.animationKey === "body_charge";
     return true;
   }
-  function choose(side, foe) {
-    const read = (side.fighter.defense.focus ?? 1) >= 1.12;
-    let best = -1;
-    let score = -1;
-    side.fighter.attacks.forEach((attack, i) => {
-      if ((side.cd[i] ?? 0) > 0) return;
-      const priority = attack.flags.includes("priority") ? 6 : 0;
-      let s = (read ? strikeDamage(attack, foe.fighter.defense) : attack.power) + priority;
-      const rooted = side.fighter.defense.footing === "rooted" && foe.fighter.defense.footing !== "rooted";
-      const short = (attack.type === "melee" || attack.type === "slam") && attack.range < 3;
-      if (rooted && short) s *= 0.4;
-      if (s > score) {
-        score = s;
-        best = i;
+  function shapeBlow(self, foe, attack, damageIn) {
+    let damage = damageIn;
+    const aside = [];
+    const ranged2 = attack.type === "breath" || attack.type === "projectile";
+    if (ranged2 && foe.fighter.defense.armor >= 0.2) aside.push("It finds a seam.");
+    if (attack.flags.includes("dual") && attack.element2) aside.push("Both elements arrive.");
+    if (foe.fighter.defense.airborne && (attack.type === "slam" || attack.animationKey === "body_charge") && !attack.flags.includes("aerial")) {
+      aside.push("It meets air.");
+    }
+    const planted2 = foe.fighter.defense.specials.find((s) => s.id === "immovable");
+    if (planted2 && (attack.type === "slam" || attack.fxMotion === "charge" || attack.fxMotion === "thrust")) {
+      damage = Math.max(1, Math.round(damage * 0.94));
+      aside.push("It does not give the ground.");
+    }
+    const coat = foe.fighter.defense.specials.find((s) => s.id === "mucus");
+    if (coat && attack.element === "water") {
+      damage = Math.max(1, Math.round(damage * (1 - Math.min(0.14, coat.value))));
+      aside.push("The coat shrugs it.");
+    } else if (coat && attack.type === "melee") {
+      const cling = Math.max(1, Math.min(Math.round(damage * 0.08), Math.round(self.fighter.defense.hp * 0.04)));
+      self.dots.push({ damage: cling, left: 1, name: coat.name, element: attack.element });
+      aside.push("It clings.");
+    }
+    const aegis = foe.fighter.defense.specials.find((s) => s.id === "relic-aegis");
+    if (aegis && !foe.aegisUsed && relicMatches(aegis.aspect, attack)) {
+      const cut = Math.max(1, Math.round(damage * Math.min(0.22, aegis.value + 0.08)));
+      damage = Math.max(1, damage - cut);
+      foe.aegisUsed = true;
+      aside.push(aegis.aspect && aegis.aspect !== "guard" ? "The relic meets that blow." : "The relic answers.");
+    }
+    const ward2 = foe.fighter.defense.specials.find((s) => s.id === "ascent-ward");
+    if (ward2) {
+      const cut = Math.round(damage * Math.min(0.08, ward2.value * 0.4));
+      if (cut > 0) {
+        damage = Math.max(1, damage - cut);
+        aside.push("The ascent holds.");
       }
-    });
-    return best;
+    }
+    const slip = foe.fighter.defense.specials.find((s) => s.id === "slip");
+    if (slip && (attack.type === "melee" || attack.type === "slam") && !attack.flags.includes("aerial")) {
+      const cut = Math.round(damage * Math.min(0.1, slip.value * 0.16));
+      if (cut > 0) {
+        damage = Math.max(1, damage - cut);
+        aside.push("The wings shed it.");
+      }
+    }
+    const cannotClose = self.fighter.defense.footing === "rooted" && foe.fighter.defense.footing !== "rooted" && (attack.type === "melee" || attack.type === "slam") && attack.range < 3;
+    if (cannotClose) {
+      damage = Math.max(1, Math.round(damage * 0.72));
+      aside.push("It cannot close.");
+    }
+    if (foe.fighter.defense.brace && !foe.braced) {
+      const cut = Math.max(1, Math.round(damage * foe.fighter.defense.brace));
+      damage = Math.max(1, damage - cut);
+      foe.braced = true;
+      aside.push("It sets against the blow.");
+    }
+    if (foe.warding) {
+      damage = Math.max(1, Math.round(damage * 0.62));
+      foe.warding = false;
+      aside.push("The guard takes it.");
+    }
+    if ((attack.hits ?? 1) > 1) aside.push(`It lands ${attack.hits} times.`);
+    return { damage, aside };
   }
-  function resolveBattle(a, b, maxTurns = 16) {
-    const sides = [
-      { fighter: a, hp: a.defense.hp, cd: a.attacks.map(() => 0), dots: [], aegisUsed: false, braced: false },
-      { fighter: b, hp: b.defense.hp, cd: b.attacks.map(() => 0), dots: [], aegisUsed: false, braced: false }
+  function groundMul(ground, attack) {
+    if (!ground) return 1;
+    const place = ground.toLowerCase();
+    let mul = 1;
+    if (/reef|deep_ocean|swamp|aquatic/.test(place)) {
+      if (attack.fxMotion === "charge" || attack.type === "slam") mul *= 0.92;
+      if (attack.animationKey === "fin_rush" || attack.fxMotion === "swim") mul *= 1.08;
+    } else if (/desert|volcan/.test(place) && attack.element === "fire") mul *= 1.06;
+    else if (/tundra|alpine/.test(place) && attack.element === "ice") mul *= 1.06;
+    else if (/forest|grass/.test(place) && attack.element === "plant") mul *= 1.05;
+    else if (/cave/.test(place) && (attack.type === "breath" || attack.type === "projectile")) mul *= 0.94;
+    return mul;
+  }
+  function inReach(bout, attack) {
+    return attack.range + 0.4 >= bout.distance;
+  }
+  function sync(bout) {
+    const [a, b] = bout._sides;
+    bout.leftHp = a.hp;
+    bout.rightHp = b.hp;
+    if (a.hp <= 0 && b.hp > 0) {
+      bout.winnerId = b.fighter.id;
+      bout.over = true;
+    } else if (b.hp <= 0 && a.hp > 0) {
+      bout.winnerId = a.fighter.id;
+      bout.over = true;
+    }
+  }
+  function freshSides(a, b) {
+    return [
+      { fighter: a, hp: a.defense.hp, cd: a.attacks.map(() => 0), dots: [], aegisUsed: false, braced: false, warding: false },
+      { fighter: b, hp: b.defense.hp, cd: b.attacks.map(() => 0), dots: [], aegisUsed: false, braced: false, warding: false }
     ];
-    const log = [];
-    let actor = a.defense.hp < b.defense.hp ? 0 : b.defense.hp < a.defense.hp ? 1 : (a.defense.initiative ?? 1) >= (b.defense.initiative ?? 1) ? 0 : 1;
-    let turn = 1;
-    const alive = () => sides[0].hp > 0 && sides[1].hp > 0;
-    while (turn <= maxTurns && alive()) {
-      const self = sides[actor];
-      const foe = sides[1 - actor];
-      let dotSum = 0;
-      const dotNames = [];
-      let dotElement = "beast";
-      self.dots = self.dots.filter((dot) => {
-        if (dot.left <= 0) return false;
-        dotSum += dot.damage;
-        dot.left -= 1;
-        dotNames.push(dot.name);
-        dotElement = dot.element;
-        return dot.left > 0;
-      });
-      if (dotSum > 0) {
-        self.hp = Math.max(0, self.hp - dotSum);
-        log.push({
-          turn,
-          actorId: self.fighter.id,
-          actorName: self.fighter.name,
-          attackName: dotNames.join(", "),
-          attackId: "dot",
-          animationKey: "act",
-          damage: dotSum,
-          hpAfter: self.hp,
-          targetName: self.fighter.name,
-          ko: self.hp <= 0,
-          element: dotElement,
-          fxMotion: "brume",
-          text: `${self.fighter.name} takes ${dotSum} from ${dotNames.join(", ")}.`
-        });
-        if (self.hp <= 0) break;
-      }
-      const knit = self.fighter.defense.specials.find((s) => s.id === "sap-knit");
-      if (knit && self.hp > 0 && self.hp < self.fighter.defense.hp) {
-        const heal = Math.max(1, Math.round(self.fighter.defense.hp * Math.min(0.02, knit.value * 0.35)));
-        const before = self.hp;
-        self.hp = Math.min(self.fighter.defense.hp, self.hp + heal);
-        if (self.hp > before) {
-          log.push({
-            turn,
-            actorId: self.fighter.id,
-            actorName: self.fighter.name,
-            attackName: knit.name,
-            attackId: "knit",
-            animationKey: "act",
-            damage: self.hp - before,
-            hpAfter: self.hp,
-            targetName: self.fighter.name,
-            ko: false,
-            element: "plant",
-            fxMotion: "knit",
-            text: `${self.fighter.name} knits ${self.hp - before} back (${self.hp} now).`
-          });
-        }
-      }
-      self.cd = self.cd.map((c) => Math.max(0, c - 1));
-      const index = choose(self, foe);
-      if (index < 0) {
-        actor = 1 - actor;
-        if (actor === 0) turn += 1;
-        continue;
-      }
-      const attack = self.fighter.attacks[index];
-      const rawDamage = Math.max(1, Math.round(strikeDamage(attack, foe.fighter.defense) * (self.fighter.defense.edge ?? 1)));
-      const leaned = Math.max(1, Math.round(rawDamage * massLean(self.fighter.defense.hp, foe.fighter.defense.hp)));
-      const cap = blowCap(foe.fighter.defense.hp);
-      let damage = Math.min(leaned, cap);
-      const limited = damage < rawDamage;
-      const aside = [];
-      const ranged2 = attack.type === "breath" || attack.type === "projectile";
-      if (ranged2 && foe.fighter.defense.armor >= 0.2) aside.push("It finds a seam.");
-      if (attack.flags.includes("dual") && attack.element2) aside.push("Both elements arrive.");
-      if (foe.fighter.defense.airborne && (attack.type === "slam" || attack.animationKey === "body_charge") && !attack.flags.includes("aerial")) {
-        aside.push("It meets air.");
-      }
-      const planted2 = foe.fighter.defense.specials.find((s) => s.id === "immovable");
-      if (planted2 && (attack.type === "slam" || attack.fxMotion === "charge" || attack.fxMotion === "thrust")) {
-        damage = Math.max(1, Math.round(damage * 0.94));
-        aside.push("It does not give the ground.");
-      }
-      const coat = foe.fighter.defense.specials.find((s) => s.id === "mucus");
-      if (coat && attack.element === "water") {
-        damage = Math.max(1, Math.round(damage * (1 - Math.min(0.14, coat.value))));
-        aside.push("The coat shrugs it.");
-      } else if (coat && attack.type === "melee") {
-        const cling = Math.max(1, Math.min(Math.round(damage * 0.08), Math.round(self.fighter.defense.hp * 0.04)));
-        self.dots.push({ damage: cling, left: 1, name: coat.name, element: attack.element });
-        aside.push("It clings.");
-      }
-      const aegis = foe.fighter.defense.specials.find((s) => s.id === "relic-aegis");
-      if (aegis && !foe.aegisUsed && relicMatches(aegis.aspect, attack)) {
-        const cut = Math.max(1, Math.round(damage * Math.min(0.22, aegis.value + 0.08)));
-        damage = Math.max(1, damage - cut);
-        foe.aegisUsed = true;
-        aside.push(aegis.aspect && aegis.aspect !== "guard" ? "The relic meets that blow." : "The relic answers.");
-      }
-      const ward2 = foe.fighter.defense.specials.find((s) => s.id === "ascent-ward");
-      if (ward2) {
-        const cut = Math.round(damage * Math.min(0.08, ward2.value * 0.4));
-        if (cut > 0) {
-          damage = Math.max(1, damage - cut);
-          aside.push("The ascent holds.");
-        }
-      }
-      const slip = foe.fighter.defense.specials.find((s) => s.id === "slip");
-      if (slip && (attack.type === "melee" || attack.type === "slam") && !attack.flags.includes("aerial")) {
-        const cut = Math.round(damage * Math.min(0.1, slip.value * 0.16));
-        if (cut > 0) {
-          damage = Math.max(1, damage - cut);
-          aside.push("The wings shed it.");
-        }
-      }
-      const cannotClose = self.fighter.defense.footing === "rooted" && foe.fighter.defense.footing !== "rooted" && (attack.type === "melee" || attack.type === "slam") && attack.range < 3;
-      if (cannotClose) {
-        damage = Math.max(1, Math.round(damage * 0.72));
-        aside.push("It cannot close.");
-      }
-      if (foe.fighter.defense.brace && !foe.braced) {
-        const cut = Math.max(1, Math.round(damage * foe.fighter.defense.brace));
-        damage = Math.max(1, damage - cut);
-        foe.braced = true;
-        aside.push("It sets against the blow.");
-      }
-      if ((attack.hits ?? 1) > 1) aside.push(`It lands ${attack.hits} times.`);
-      foe.hp = Math.max(0, foe.hp - damage);
-      self.cd[index] = Math.max(1, attack.cooldown - ((self.fighter.defense.focus ?? 1) >= 1.12 ? 1 : 0));
-      if (attack.type === "dot" || attack.flags.includes("echo")) {
-        const tick = attack.type === "dot" ? 0.28 : 0.12;
-        const turns = attack.type === "dot" ? 2 : 1;
-        foe.dots.push({
-          damage: Math.max(1, Math.min(Math.round(attack.power * tick), Math.round(foe.fighter.defense.hp * 0.06))),
-          left: turns,
-          name: attack.name,
-          element: attack.element
-        });
-      }
-      const thorn = foe.fighter.defense.specials.find((s) => s.id === "thorns");
-      let reflected = 0;
-      if (thorn && damage > 0) {
-        reflected = Math.min(
-          Math.round(damage * Math.min(0.1, thorn.value)),
-          Math.round(self.fighter.defense.hp * 0.06)
-        );
-        if (reflected > 0) self.hp = Math.max(0, self.hp - reflected);
-      }
-      const hold = foe.fighter.defense.knockbackResist >= 0.45;
-      const ko = foe.hp <= 0;
-      const lead = aside.find((s) => s !== "It finds a seam.") ?? aside[0];
-      const extra = `${lead ? ` ${lead}` : ""}${limited ? " A single moment will not spend the whole fight." : ""}${reflected ? ` Thorns return ${reflected}.` : ""}`;
-      log.push({
-        turn,
+  }
+  function startBout(a, b, ground) {
+    const sides = freshSides(a, b);
+    const actor = a.defense.hp < b.defense.hp ? 0 : b.defense.hp < a.defense.hp ? 1 : (a.defense.initiative ?? 1) >= (b.defense.initiative ?? 1) ? 0 : 1;
+    return {
+      actor,
+      turn: 1,
+      distance: 3.4,
+      ground,
+      log: [],
+      over: false,
+      winnerId: null,
+      leftHp: a.defense.hp,
+      rightHp: b.defense.hp,
+      leftName: a.name,
+      rightName: b.name,
+      _sides: sides,
+      _upkeep: false,
+      _max: 24
+    };
+  }
+  function openRound(bout) {
+    if (bout.over || bout._upkeep) return [];
+    const added = [];
+    const self = bout._sides[bout.actor];
+    let dotSum = 0;
+    const dotNames = [];
+    let dotElement = "beast";
+    self.dots = self.dots.filter((dot) => {
+      if (dot.left <= 0) return false;
+      dotSum += dot.damage;
+      dot.left -= 1;
+      dotNames.push(dot.name);
+      dotElement = dot.element;
+      return dot.left > 0;
+    });
+    if (dotSum > 0) {
+      self.hp = Math.max(0, self.hp - dotSum);
+      const event = {
+        turn: bout.turn,
         actorId: self.fighter.id,
         actorName: self.fighter.name,
-        attackName: attack.name,
-        attackId: attack.id,
-        animationKey: attack.animationKey,
-        damage,
+        attackName: dotNames.join(", "),
+        attackId: "dot",
+        animationKey: "act",
+        damage: dotSum,
+        hpAfter: self.hp,
+        targetName: self.fighter.name,
+        ko: self.hp <= 0,
+        element: dotElement,
+        fxMotion: "brume",
+        text: `${self.fighter.name} takes ${dotSum} from ${dotNames.join(", ")}.`
+      };
+      bout.log.push(event);
+      added.push(event);
+    }
+    const knit = self.fighter.defense.specials.find((s) => s.id === "sap-knit");
+    if (knit && self.hp > 0 && self.hp < self.fighter.defense.hp) {
+      const heal = Math.max(1, Math.round(self.fighter.defense.hp * Math.min(0.02, knit.value * 0.35)));
+      const before = self.hp;
+      self.hp = Math.min(self.fighter.defense.hp, self.hp + heal);
+      if (self.hp > before) {
+        const event = {
+          turn: bout.turn,
+          actorId: self.fighter.id,
+          actorName: self.fighter.name,
+          attackName: knit.name,
+          attackId: "knit",
+          animationKey: "act",
+          damage: self.hp - before,
+          hpAfter: self.hp,
+          targetName: self.fighter.name,
+          ko: false,
+          element: "plant",
+          fxMotion: "knit",
+          text: `${self.fighter.name} knits ${self.hp - before} back (${self.hp} now).`
+        };
+        bout.log.push(event);
+        added.push(event);
+      }
+    }
+    self.cd = self.cd.map((c) => Math.max(0, c - 1));
+    bout._upkeep = true;
+    sync(bout);
+    return added;
+  }
+  function offers(bout) {
+    const self = bout._sides[bout.actor];
+    const foe = bout._sides[1 - bout.actor];
+    const rooted = self.fighter.defense.footing === "rooted";
+    return {
+      actorName: self.fighter.name,
+      attacks: self.fighter.attacks.map((attack, index) => ({
+        index,
+        name: attack.name,
+        reaches: inReach(bout, attack),
+        ready: (self.cd[index] ?? 0) <= 0
+      })),
+      canClose: !rooted && bout.distance > 1.25,
+      canGuard: true,
+      relicWaiting: Boolean(foe.fighter.defense.specials.some((s) => s.id === "relic-aegis") && !foe.aegisUsed)
+    };
+  }
+  function advanceBout(bout) {
+    bout.actor = bout.actor === 0 ? 1 : 0;
+    if (bout.actor === 0) bout.turn += 1;
+    bout._upkeep = false;
+    if (bout.turn > bout._max) {
+      bout.over = true;
+      if (!bout.winnerId) {
+        if (bout.leftHp > bout.rightHp) bout.winnerId = bout._sides[0].fighter.id;
+        else if (bout.rightHp > bout.leftHp) bout.winnerId = bout._sides[1].fighter.id;
+      }
+    }
+  }
+  function pushEvent(bout, event) {
+    bout.log.push(event);
+    return event;
+  }
+  function commit(bout, order) {
+    if (bout.over) return [];
+    const added = [];
+    if (!bout._upkeep) added.push(...openRound(bout));
+    if (bout.over) return added;
+    const self = bout._sides[bout.actor];
+    const foe = bout._sides[1 - bout.actor];
+    if (order.kind === "close") {
+      const step = self.fighter.defense.footing === "rooted" ? 0 : 1.55;
+      bout.distance = Math.max(1.2, bout.distance - step);
+      added.push(pushEvent(bout, {
+        turn: bout.turn,
+        actorId: self.fighter.id,
+        actorName: self.fighter.name,
+        attackName: "Close",
+        attackId: "close",
+        animationKey: "act",
+        damage: 0,
         hpAfter: foe.hp,
         targetName: foe.fighter.name,
-        ko,
-        element: attack.element,
-        fxMotion: attack.fxMotion,
-        fxSeed: attack.fxSeed,
-        aside: lead,
-        hits: attack.hits,
-        text: ko ? `${self.fighter.name} uses ${attack.name} for ${damage}. ${foe.fighter.name} falls.${extra}` : `${self.fighter.name} uses ${attack.name} for ${damage}. ${foe.fighter.name} ${hold ? "holds" : "gives ground"} (${foe.hp} left).${extra}`
-      });
-      if (self.hp <= 0) break;
-      actor = 1 - actor;
-      if (actor === 0) turn += 1;
+        ko: false,
+        text: `${self.fighter.name} steps in. The gap is ${bout.distance.toFixed(1)}.`
+      }));
+    } else if (order.kind === "guard") {
+      self.warding = true;
+      added.push(pushEvent(bout, {
+        turn: bout.turn,
+        actorId: self.fighter.id,
+        actorName: self.fighter.name,
+        attackName: "Guard",
+        attackId: "guard",
+        animationKey: "act",
+        damage: 0,
+        hpAfter: self.hp,
+        targetName: self.fighter.name,
+        ko: false,
+        fxMotion: "aegis",
+        text: `${self.fighter.name} guards.`
+      }));
+    } else {
+      const attack = self.fighter.attacks[order.index];
+      if (!attack || (self.cd[order.index] ?? 0) > 0) return added;
+      const reaches = inReach(bout, attack);
+      if (!reaches) {
+        self.cd[order.index] = Math.max(1, attack.cooldown);
+        added.push(pushEvent(bout, {
+          turn: bout.turn,
+          actorId: self.fighter.id,
+          actorName: self.fighter.name,
+          attackName: attack.name,
+          attackId: attack.id,
+          animationKey: attack.animationKey,
+          damage: 0,
+          hpAfter: foe.hp,
+          targetName: foe.fighter.name,
+          ko: false,
+          element: attack.element,
+          fxMotion: attack.fxMotion,
+          aside: "It falls short.",
+          text: `${self.fighter.name} uses ${attack.name}. It falls short.`
+        }));
+      } else {
+        const rawDamage = Math.max(1, Math.round(strikeDamage(attack, foe.fighter.defense) * (self.fighter.defense.edge ?? 1) * groundMul(bout.ground, attack)));
+        const leaned = Math.max(1, Math.round(rawDamage * massLean(self.fighter.defense.hp, foe.fighter.defense.hp)));
+        let damage = Math.min(leaned, blowCap(foe.fighter.defense.hp));
+        const limited = damage < rawDamage;
+        const shaped = shapeBlow(self, foe, attack, damage);
+        damage = shaped.damage;
+        const hits = Math.max(1, Math.min(3, attack.hits ?? 1));
+        const shares = splitHits(damage, hits);
+        self.cd[order.index] = Math.max(1, attack.cooldown - ((self.fighter.defense.focus ?? 1) >= 1.12 ? 1 : 0));
+        if (attack.type === "dot" || attack.flags.includes("echo")) {
+          const tick = attack.type === "dot" ? 0.28 : 0.12;
+          foe.dots.push({
+            damage: Math.max(1, Math.min(Math.round(attack.power * tick), Math.round(foe.fighter.defense.hp * 0.06))),
+            left: attack.type === "dot" ? 2 : 1,
+            name: attack.name,
+            element: attack.element
+          });
+        }
+        shares.forEach((part, n) => {
+          foe.hp = Math.max(0, foe.hp - part);
+          const thorn = foe.fighter.defense.specials.find((s) => s.id === "thorns");
+          let reflected = 0;
+          if (thorn && part > 0) {
+            reflected = Math.min(Math.round(part * Math.min(0.1, thorn.value)), Math.round(self.fighter.defense.hp * 0.06));
+            if (reflected > 0) self.hp = Math.max(0, self.hp - reflected);
+          }
+          const ko = foe.hp <= 0;
+          const lead = n === 0 ? shaped.aside.find((s) => s !== "It finds a seam.") ?? shaped.aside[0] : `Hit ${n + 1}.`;
+          const extra = `${lead ? ` ${lead}` : ""}${n === 0 && limited ? " A single moment will not spend the whole fight." : ""}${reflected ? ` Thorns return ${reflected}.` : ""}`;
+          added.push(pushEvent(bout, {
+            turn: bout.turn,
+            actorId: self.fighter.id,
+            actorName: self.fighter.name,
+            attackName: hits > 1 ? `${attack.name} ${n + 1}` : attack.name,
+            attackId: attack.id,
+            animationKey: attack.animationKey,
+            damage: part,
+            hpAfter: foe.hp,
+            targetName: foe.fighter.name,
+            ko,
+            element: attack.element,
+            fxMotion: attack.fxMotion,
+            fxSeed: attack.fxSeed,
+            aside: lead,
+            hits: 1,
+            text: ko ? `${self.fighter.name} uses ${attack.name} for ${part}. ${foe.fighter.name} falls.${extra}` : `${self.fighter.name} uses ${attack.name} for ${part}. ${foe.fighter.name} has ${foe.hp} left.${extra}`
+          }));
+        });
+      }
     }
-    let winnerId = null;
-    if (sides[0].hp <= 0 && sides[1].hp > 0) winnerId = b.id;
-    else if (sides[1].hp <= 0 && sides[0].hp > 0) winnerId = a.id;
-    else if (sides[0].hp !== sides[1].hp) winnerId = sides[0].hp > sides[1].hp ? a.id : b.id;
+    sync(bout);
+    if (!bout.over) advanceBout(bout);
+    return added;
+  }
+  function splitHits(total, hits) {
+    if (hits <= 1) return [total];
+    const base = Math.floor(total / hits);
+    const shares = Array.from({ length: hits }, () => base);
+    let left = total - base * hits;
+    for (let i = 0; left > 0; i++, left--) shares[i % hits] = (shares[i % hits] ?? 0) + 1;
+    return shares.filter((n) => n > 0);
+  }
+  function autoOrder(bout) {
+    const self = bout._sides[bout.actor];
+    let best = -1;
+    let score = -1;
+    self.fighter.attacks.forEach((attack, index) => {
+      if ((self.cd[index] ?? 0) > 0 || !inReach(bout, attack)) return;
+      const s = attack.power + (attack.flags.includes("priority") ? 6 : 0);
+      if (s > score) {
+        score = s;
+        best = index;
+      }
+    });
+    if (best >= 0) return { kind: "attack", index: best };
+    if (self.fighter.defense.footing !== "rooted" && bout.distance > 1.25) return { kind: "close" };
+    let any = -1;
+    let anyScore = -1;
+    self.fighter.attacks.forEach((attack, index) => {
+      if ((self.cd[index] ?? 0) > 0) return;
+      if (attack.power > anyScore) {
+        anyScore = attack.power;
+        any = index;
+      }
+    });
+    if (any >= 0) return { kind: "attack", index: any };
+    return { kind: "guard" };
+  }
+  function finishBout(bout) {
+    const added = [];
+    let guard = 0;
+    while (!bout.over && bout.turn <= bout._max && guard < 48) {
+      added.push(...openRound(bout));
+      if (bout.over) break;
+      added.push(...commit(bout, autoOrder(bout)));
+      guard += 1;
+    }
+    if (!bout.over) {
+      bout.over = true;
+      if (bout.leftHp > bout.rightHp) bout.winnerId = bout._sides[0].fighter.id;
+      else if (bout.rightHp > bout.leftHp) bout.winnerId = bout._sides[1].fighter.id;
+    }
+    return added;
+  }
+  function boutResult(bout) {
     return {
-      log,
-      winnerId,
-      leftHp: sides[0].hp,
-      rightHp: sides[1].hp,
-      rounds: Math.max(1, turn - (actor === 0 ? 1 : 0))
+      log: bout.log,
+      winnerId: bout.winnerId,
+      leftHp: bout.leftHp,
+      rightHp: bout.rightHp,
+      rounds: bout.turn
     };
   }
 
@@ -4328,9 +4522,8 @@
       const token = ++showToken;
       const left = { id: a.id, name: a.name, attacks: a.attacks, defense: a.defense };
       const right = { id: b.id, name: b.name, attacks: b.attacks, defense: b.defense };
-      const result = resolveBattle(left, right);
       go.setAttribute("disabled", "");
-      void playLog(token, logHost, result, a, b, () => {
+      void playSteered(token, logHost, left, right, a, b, () => {
         go.removeAttribute("disabled");
       });
     });
@@ -4351,6 +4544,8 @@
     );
   }
   function showBlow(event, self, foe, aim2) {
+    if (event.attackId === "close") return;
+    if (event.damage === 0 && event.attackId !== "guard" && event.attackId !== "knit") return;
     const dueling = window.__primordiaDuel;
     const ctx = lab();
     const actor = event.actorId === self.id ? self : foe;
@@ -4375,35 +4570,67 @@
       toward: aim2?.to
     });
   }
-  async function playLog(token, host, result, self, foe, done) {
+  async function playSteered(token, host, left, right, self, foe, done) {
+    const ground = self.companion.ecology || foe.companion.ecology || "";
+    const bout = startBout(left, right, ground || void 0);
     const stage = openBattle(self.companion, foe.companion);
+    const waitChoice = () => new Promise((resolve) => {
+      const offer = offers(bout);
+      const buttons = offer.attacks.filter((attack) => attack.ready).map((attack) => {
+        const button = el("button", { class: "btn small", type: "button" }, attack.reaches ? attack.name : `${attack.name} \xB7 short`);
+        button.addEventListener("click", () => resolve({ kind: "attack", index: attack.index }));
+        return button;
+      });
+      if (offer.canClose) {
+        const close = el("button", { class: "btn small", type: "button" }, "Step in");
+        close.addEventListener("click", () => resolve({ kind: "close" }));
+        buttons.push(close);
+      }
+      if (offer.canGuard) {
+        const guard = el("button", { class: "btn small", type: "button" }, "Guard");
+        guard.addEventListener("click", () => resolve({ kind: "guard" }));
+        buttons.push(guard);
+      }
+      const auto = el("button", { class: "btn small", type: "button" }, "Let it choose");
+      auto.addEventListener("click", () => resolve(autoOrder(bout)));
+      const rest = el("button", { class: "btn small", type: "button" }, "Finish the bout");
+      rest.addEventListener("click", () => resolve("finish"));
+      host.replaceChildren(
+        el("p", {}, `${offer.actorName}'s turn. Gap ${bout.distance.toFixed(1)}.`),
+        el("p", { class: "mono" }, `${self.name} ${bout.leftHp} \xB7 ${foe.name} ${bout.rightHp}`),
+        offer.relicWaiting ? el("p", { class: "muted" }, "A relic is still waiting.") : el("p", { class: "muted" }, "Choose the blow."),
+        el("div", { class: "row" }, ...buttons, auto, rest),
+        el("ul", { class: "list" }, ...bout.log.slice(-6).map((entry) => el("li", {}, entry.text)))
+      );
+    });
     try {
       const placed = await stage.ready;
       if (token !== showToken) return;
-      if (!placed) {
-        host.replaceChildren(el("p", { class: "muted" }, "The two ages are not both standing in the habitat yet."));
-      }
-      for (let i = 0; i < result.log.length; i++) {
+      while (!bout.over && token === showToken) {
+        const opened = openRound(bout);
+        for (const event of opened) {
+          if (token !== showToken) return;
+          const aim2 = stage.blow(event);
+          showBlow(event, self, foe, aim2);
+        }
+        if (bout.over) break;
+        const choice = await waitChoice();
         if (token !== showToken) return;
-        const event = result.log[i];
-        const winner = result.winnerId === self.id ? self.name : result.winnerId === foe.id ? foe.name : "Neither";
-        host.replaceChildren(
-          el("p", { class: "muted" }, i + 1 < result.log.length ? "Both are on the field." : result.winnerId ? `${winner} stands.` : "Neither falls."),
-          el(
-            "ul",
-            { class: "list" },
-            ...result.log.slice(0, i + 1).map(
-              (entry, n) => el("li", { class: n === i ? "combat-now" : "" }, entry.text)
-            )
-          )
-        );
-        const aim2 = stage.blow(event);
-        showBlow(event, self, foe, aim2);
-        const ok = await sleep(placed ? 1900 : 1500, token);
-        if (!ok) return;
+        const events = choice === "finish" ? finishBout(bout) : commit(bout, choice);
+        for (const event of events) {
+          if (token !== showToken) return;
+          host.replaceChildren(
+            el("p", { class: "mono" }, `${self.name} ${bout.leftHp} \xB7 ${foe.name} ${bout.rightHp}`),
+            el("ul", { class: "list" }, ...bout.log.slice(-6).map((entry, n, all) => el("li", { class: n === all.length - 1 ? "combat-now" : "" }, entry.text)))
+          );
+          const aim2 = stage.blow(event);
+          showBlow(event, self, foe, aim2);
+          const ok = await sleep(choice === "finish" ? 700 : placed ? 1600 : 900, token);
+          if (!ok) return;
+        }
       }
-      paintLog(host, result, self, foe);
-      stage.finish(result.winnerId);
+      paintLog(host, boutResult(bout), self, foe);
+      stage.finish(bout.winnerId);
       done();
     } finally {
       if (token !== showToken) stage.close();

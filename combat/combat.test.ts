@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { toCombatPhenotype } from "./adapter.ts";
-import { blowCap, resolveBattle, strikeDamage } from "./battle.ts";
+import { blowCap, commit, offers, openRound, resolveBattle, startBout, strikeDamage } from "./battle.ts";
 import { ATTACK_LEXICON, MOTIONS, WARD_LEXICON } from "./catalogue.ts";
 import { breathStyle, generateAttacks, generateDefense, kitSignature, massClassOf, massFactorOf } from "./generate.ts";
 import { chooseLine, gaitOf, hullOf, LIFE_STAGES, supportRadius, touchDistance, type Companion } from "./arena.ts";
@@ -572,6 +572,54 @@ describe("battle", () => {
     assert.equal(pair.log.find((e) => e.actorId === "a")?.hits, 2);
     const temper = generateDefense(ph({ element: "fire", sizeM: 1.2, covering: { type: "skin" } }));
     assert.ok(temper.specials.some((s) => s.id === "temper"));
+  });
+
+  it("lets a short blow fall short until someone steps in, and a guard take the next one", () => {
+    const hide: DefenseProfile = {
+      hp: 80,
+      armor: 0,
+      knockbackResist: 0.2,
+      elementalResist: {},
+      specials: [],
+      massClass: "medium",
+      notes: [],
+      footing: "mobile",
+    };
+    const bite: Attack = {
+      id: "bite", template: "fang_bite", name: "Bite", type: "melee", element: "beast",
+      basePower: 20, power: 20, range: 1.2, cooldown: 1, animationKey: "jaw_snap", effectStyle: "bite", description: "", flags: [],
+    };
+    const breath: Attack = {
+      id: "breath", template: "breath_stream", name: "Stream", type: "breath", element: "fire",
+      basePower: 16, power: 16, range: 7, cooldown: 2, animationKey: "breath_stream", effectStyle: "stream", description: "", flags: [], fxMotion: "stream",
+    };
+    const bout = startBout(
+      { id: "a", name: "A", attacks: [bite, breath], defense: { ...hide, hp: 40 } },
+      { id: "b", name: "B", attacks: [bite], defense: hide },
+      "volcanic",
+    );
+    openRound(bout);
+    const menu = offers(bout);
+    const short = menu.attacks.find((a) => a.name === "Bite")!;
+    const far = menu.attacks.find((a) => a.name === "Stream")!;
+    assert.equal(short.reaches, false);
+    assert.equal(far.reaches, true);
+    const missed = commit(bout, { kind: "attack", index: short.index });
+    assert.equal(missed.at(-1)?.damage, 0);
+    assert.match(missed.at(-1)?.text ?? "", /falls short/);
+    openRound(bout);
+    commit(bout, { kind: "close" });
+    openRound(bout);
+    commit(bout, { kind: "close" });
+    assert.ok(bout.distance <= 1.6);
+    openRound(bout);
+    const guarded = commit(bout, { kind: "guard" });
+    assert.match(guarded.at(-1)?.text ?? "", /guards/);
+    openRound(bout);
+    const into = commit(bout, { kind: "attack", index: 0 });
+    const landed = into.filter((e) => e.damage > 0);
+    assert.ok(landed.length >= 1);
+    assert.match(landed[0]?.text ?? "", /guard takes it/);
   });
 });
 
