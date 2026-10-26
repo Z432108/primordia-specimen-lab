@@ -224,6 +224,94 @@ describe("adapter", () => {
     const attacks = generateAttacks(mapped);
     assert.ok(attacks.length >= 3);
   });
+
+  it("reads a grown body the way the generator writes one", () => {
+    const grown = {
+      stage: "Apex",
+      sizeM: 1.7,
+      element: "fire",
+      element2: "earth",
+      ecology: "volcanic",
+      plan: "quadruped",
+      topo: "T1",
+      loco: "QuadGait",
+      volant: false,
+      covering: { type: "scale" },
+      head: { teeth: { type: "tusks", count: 2 } },
+      body: { fam: "reptile", p: { musc: 180 } },
+      line: { vigor: 200, purity: 160, f: 12 },
+      myth: [],
+      anomaly: [],
+      adapt: [{ id: "heatproof" }],
+      parts: [
+        { sys: "horns", fam: "brow", side: -1 },
+        { sys: "horns", fam: "brow", side: 1 },
+        { sys: "legs", fam: "digitigrade" },
+        { sys: "legs", fam: "digitigrade" },
+        { sys: "legs", fam: "digitigrade" },
+        { sys: "legs", fam: "digitigrade" },
+        { sys: "tails", fam: "club" },
+        { sys: "dorsal", fam: "thorns" },
+        { sys: "arms", fam: "raptorial", term: "pincer" },
+        { sys: "eyes", fam: "camera", dev: "absent" },
+      ],
+      stats: { power: 52, guard: 34, swift: 41, focus: 22, vigor: 58, spirit: 27 },
+    };
+    const mapped = toCombatPhenotype(grown);
+    assert.equal(mapped.element, "fire");
+    assert.equal(mapped.element2, "earth");
+    assert.equal(mapped.loco, "QuadGait");
+    assert.equal(mapped.ecology, "volcanic");
+    assert.ok(mapped.features?.includes("tusks"));
+    assert.ok(mapped.features?.includes("heatproof"));
+    assert.equal(mapped.units.find((u) => u.unit === "horn")?.count, 2);
+    assert.equal(mapped.units.find((u) => u.unit === "spine")?.count, 1);
+    assert.equal(mapped.units.find((u) => u.unit === "eye"), undefined);
+    assert.equal(mapped.claws, "pincer");
+    assert.equal(mapped.stats?.power, 52);
+    const attacks = generateAttacks(mapped);
+    const defense = generateDefense(mapped);
+    assert.ok(attacks.some((a) => a.template === "spike_volley"));
+    assert.ok(attacks.some((a) => a.template === "claw_arc"));
+    assert.ok(mapped.units.some((u) => u.unit === "tail" && u.role === "club"));
+    assert.ok(attacks.some((a) => a.element === "fire"));
+    assert.ok(attacks.some((a) => a.flags.includes("dual")));
+    assert.ok(defense.specials.some((s) => s.id === "thorns"));
+    assert.ok((defense.edge ?? 1) > 1);
+    assert.equal(defense.elementalResist.fire > 0, true);
+    assert.equal((defense.elementalResist.water ?? 0) < 0, true);
+  });
+
+  it("grows a kit for every element, covering, and plan the generator can write", () => {
+    const elements = ["plant", "fire", "water", "earth", "ice", "electric", "plasma", "air", "metal", "light", "void", "beast"];
+    const coverings = ["skin", "fur", "feather", "scale", "chitin", "bark", "slime", "shell", "plate"];
+    const plans = ["biped", "quadruped", "hexapod", "swimmer", "serpentine", "floater", "sessile_mass", "radial", "centauroid"];
+    const locos = ["BipedWalk", "QuadGait", "MultiLegRipple", "Swim", "Hover", "Sessile", "Slither"];
+    for (const element of elements) {
+      for (const covering of coverings) {
+        for (let n = 0; n < plans.length; n++) {
+          const plan = plans[n]!;
+          const mapped = toCombatPhenotype({
+            sizeM: 0.4 + ((n + element.length) % 5) * 0.5,
+            element,
+            element2: n % 4 === 0 ? elements[(elements.indexOf(element) + 3) % elements.length] : null,
+            covering: { type: covering },
+            plan,
+            loco: locos[n % locos.length],
+            volant: plan === "floater",
+            ecology: n % 2 ? "cave" : "reef",
+            parts: n % 2 ? [{ sys: "wings", fam: "bat" }, { sys: "wings", fam: "bat" }] : [{ sys: "fins", fam: "frill" }],
+            head: { teeth: { type: n % 3 === 0 ? "fangs" : "peg" } },
+          });
+          const attacks = generateAttacks(mapped);
+          const defense = generateDefense(mapped);
+          assert.ok(attacks.length >= 3, `${element} ${covering} ${plan}`);
+          assert.ok(defense.hp > 0);
+          assert.equal(mapped.element, element);
+        }
+      }
+    }
+  });
 });
 
 describe("battle", () => {

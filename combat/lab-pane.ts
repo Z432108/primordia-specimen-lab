@@ -56,10 +56,23 @@ function inhabit(ph: CombatPhenotype, ctx: LabCtx): CombatPhenotype {
   return ecology ? { ...ph, ecology } : ph;
 }
 
+function sheetStats(raw: unknown, ph: CombatPhenotype): CombatPhenotype {
+  if (ph.stats?.power != null && ph.stats.guard != null && ph.stats.swift != null) return ph;
+  const scores = (window as unknown as {
+    __lab?: { scores?: (body: unknown, affinity?: string) => Record<string, number> | null };
+  }).__lab?.scores;
+  if (!scores) return ph;
+  const affinity = lab()?.state?.genome && (lab()?.state?.genome as { statAffinity?: string }).statAffinity;
+  const values = scores(raw, affinity);
+  if (!values?.power) return ph;
+  return { ...ph, stats: values };
+}
+
 function currentPhenotype(): CombatPhenotype | null {
   const ctx = lab();
   if (!ctx?.state?.ph) return null;
-  return inhabit(toCombatPhenotype(ctx.state.ph, { build: ctx.state.build }), ctx);
+  const raw = ctx.state.ph;
+  return inhabit(sheetStats(raw, toCombatPhenotype(raw, { build: ctx.state.build })), ctx);
 }
 
 function lab(): LabCtx | null {
@@ -109,7 +122,8 @@ function remember(id: string, name: string, stage: string, ph: CombatPhenotype, 
 function currentRecord(): Remembered | null {
   const ctx = lab();
   if (!ctx?.state?.ph) return null;
-  const ph = inhabit(toCombatPhenotype(ctx.state.ph, { build: ctx.state.build }), ctx);
+  const raw = ctx.state.ph;
+  const ph = inhabit(sheetStats(raw, toCombatPhenotype(raw, { build: ctx.state.build })), ctx);
   const id = ctx.state.genome?.id ?? "current";
   const stage = ctx.state.stage || "Apex";
   const name = specimenName();

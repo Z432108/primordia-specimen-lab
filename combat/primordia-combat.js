@@ -1037,10 +1037,30 @@
     const i = LIFE_STAGES.indexOf(stage);
     return STAGE_BULK[i] ?? 1;
   }
+  var STAGE_STAT = {
+    Sprout: 0.55,
+    Keen: 0.75,
+    Adept: 0.92,
+    Apex: 1,
+    Steward: 1,
+    Artisan: 1,
+    Exemplar: 1,
+    Sovereign: 1
+  };
   function scaledPhenotype(ph, fromStage, toStage) {
     const from = stageBulk(fromStage || "Apex");
     const to = stageBulk(toStage);
-    return { ...ph, sizeM: Math.max(0.12, ph.sizeM * (to / from)) };
+    const next = { ...ph, sizeM: Math.max(0.12, ph.sizeM * (to / from)) };
+    const sheet = ph.stats && Object.values(ph.stats).some((v) => v > 3);
+    if (sheet && ph.stats) {
+      const ratio = (STAGE_STAT[toStage] ?? 1) / (STAGE_STAT[fromStage] ?? 1);
+      const stats = {};
+      for (const [key, value] of Object.entries(ph.stats)) {
+        stats[key] = Math.max(1, Math.min(100, Math.round(value * ratio)));
+      }
+      next.stats = stats;
+    }
+    return next;
   }
   function companionOf(id, name, stage, ph, defense, genomeId) {
     const units = new Set(ph.units.map((u) => u.unit));
@@ -2329,7 +2349,7 @@
     ears: "ear",
     legs: "leg"
   };
-  var FANG_TEETH = /* @__PURE__ */ new Set(["fangs", "carnassial", "serrated", "needle", "conical"]);
+  var FANG_TEETH = /* @__PURE__ */ new Set(["fangs", "carnassial", "serrated", "needle", "conical", "tusks"]);
   function isRecord(v) {
     return !!v && typeof v === "object" && !Array.isArray(v);
   }
@@ -2375,7 +2395,7 @@
       const fam = str(raw.fam);
       const weight = dev === "partial" || dev === "bud" ? 0.5 : 1;
       let unit = SINGULAR[sys] ?? sys;
-      if (sys === "dorsal" && fam && /spine|quill|spike/.test(fam)) unit = "spine";
+      if (sys === "dorsal" && fam && /spine|quill|spike|thorn/.test(fam)) unit = "spine";
       if (sys === "dorsal" && fam && /shell|whorl/.test(fam)) unit = "shell";
       const prev = map.get(unit) ?? { count: 0, role: fam };
       prev.count += weight;
@@ -4002,10 +4022,20 @@
     const ecology = ctx.state.ecology || ctx.state.genome?.ecology;
     return ecology ? { ...ph, ecology } : ph;
   }
+  function sheetStats(raw, ph) {
+    if (ph.stats?.power != null && ph.stats.guard != null && ph.stats.swift != null) return ph;
+    const scores = window.__lab?.scores;
+    if (!scores) return ph;
+    const affinity = lab()?.state?.genome && (lab()?.state?.genome).statAffinity;
+    const values = scores(raw, affinity);
+    if (!values?.power) return ph;
+    return { ...ph, stats: values };
+  }
   function currentPhenotype() {
     const ctx = lab();
     if (!ctx?.state?.ph) return null;
-    return inhabit(toCombatPhenotype(ctx.state.ph, { build: ctx.state.build }), ctx);
+    const raw = ctx.state.ph;
+    return inhabit(sheetStats(raw, toCombatPhenotype(raw, { build: ctx.state.build })), ctx);
   }
   function lab() {
     const ctx = window.__lab?.ctx;
@@ -4045,7 +4075,8 @@
   function currentRecord() {
     const ctx = lab();
     if (!ctx?.state?.ph) return null;
-    const ph = inhabit(toCombatPhenotype(ctx.state.ph, { build: ctx.state.build }), ctx);
+    const raw = ctx.state.ph;
+    const ph = inhabit(sheetStats(raw, toCombatPhenotype(raw, { build: ctx.state.build })), ctx);
     const id = ctx.state.genome?.id ?? "current";
     const stage = ctx.state.stage || "Apex";
     const name = specimenName();

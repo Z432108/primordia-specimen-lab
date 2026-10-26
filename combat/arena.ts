@@ -43,10 +43,31 @@ export function stageBulk(stage: string): number {
   return STAGE_BULK[i] ?? 1;
 }
 
+const STAGE_STAT: Record<string, number> = {
+  Sprout: 0.55,
+  Keen: 0.75,
+  Adept: 0.92,
+  Apex: 1,
+  Steward: 1,
+  Artisan: 1,
+  Exemplar: 1,
+  Sovereign: 1,
+};
+
 export function scaledPhenotype(ph: CombatPhenotype, fromStage: string, toStage: string): CombatPhenotype {
   const from = stageBulk(fromStage || "Apex");
   const to = stageBulk(toStage);
-  return { ...ph, sizeM: Math.max(0.12, ph.sizeM * (to / from)) };
+  const next: CombatPhenotype = { ...ph, sizeM: Math.max(0.12, ph.sizeM * (to / from)) };
+  const sheet = ph.stats && Object.values(ph.stats).some((v) => v > 3);
+  if (sheet && ph.stats) {
+    const ratio = (STAGE_STAT[toStage] ?? 1) / (STAGE_STAT[fromStage] ?? 1);
+    const stats: Record<string, number> = {};
+    for (const [key, value] of Object.entries(ph.stats)) {
+      stats[key] = Math.max(1, Math.min(100, Math.round(value * ratio)));
+    }
+    next.stats = stats;
+  }
+  return next;
 }
 
 export function companionOf(

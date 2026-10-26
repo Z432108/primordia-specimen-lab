@@ -18,7 +18,7 @@ const SINGULAR: Record<string, string> = {
   legs: "leg",
 };
 
-const FANG_TEETH = new Set(["fangs", "carnassial", "serrated", "needle", "conical"]);
+const FANG_TEETH = new Set(["fangs", "carnassial", "serrated", "needle", "conical", "tusks"]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -68,7 +68,7 @@ function unitsFromParts(parts: unknown[]): { units: CombatUnit[]; claws?: string
     const fam = str(raw.fam);
     const weight = dev === "partial" || dev === "bud" ? 0.5 : 1;
     let unit = SINGULAR[sys] ?? sys;
-    if (sys === "dorsal" && fam && /spine|quill|spike/.test(fam)) unit = "spine";
+    if (sys === "dorsal" && fam && /spine|quill|spike|thorn/.test(fam)) unit = "spine";
     if (sys === "dorsal" && fam && /shell|whorl/.test(fam)) unit = "shell";
     const prev = map.get(unit) ?? { count: 0, role: fam };
     prev.count += weight;
